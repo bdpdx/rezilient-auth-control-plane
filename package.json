@@ -1,0 +1,22 @@
+{
+    "name": "rezilient-auth-control-plane",
+    "version": "0.0.1",
+    "private": true,
+    "license": "UNLICENSED",
+    "type": "commonjs",
+    "main": "dist/index.js",
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "start": "node dist/index.js",
+        "start:dev": "ts-node src/index.ts",
+        "test": "npm run build && node --test dist/token/token.service.test.js dist/enrollment/enrollment.integration.test.js dist/rotation/rotation.integration.test.js dist/failure-modes.test.js dist/server.admin.integration.test.js"
+    },
+    "dependencies": {
+        "zod": "^4.3.6"
+    },
+    "devDependencies": {
+        "@types/node": "^24.7.2",
+        "ts-node": "^10.9.2",
+        "typescript": "^5.9.3"
+    }
+}

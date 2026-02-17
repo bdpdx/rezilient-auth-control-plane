@@ -1,0 +1,511 @@
+openapi: 3.1.0
+info:
+  title: Rezilient Auth Control Plane API
+  version: 0.0.1
+  description: |
+    Shared auth control plane for REG/RRS tenant-instance registry, enrollment,
+    scoped token issuance, secret rotation, and audit visibility.
+servers:
+  - url: http://localhost:3010
+paths:
+  /v1/health:
+    get:
+      summary: Health check
+      operationId: getHealth
+      responses:
+        '200':
+          description: Service status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, outage_active]
+                properties:
+                  ok:
+                    type: boolean
+                  outage_active:
+                    type: boolean
+  /v1/auth/token:
+    post:
+      summary: Mint short-lived service-scoped bearer token
+      operationId: mintToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenMintRequest'
+      responses:
+        '200':
+          description: Token minted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenMintSuccess'
+        '401':
+          description: Mint denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenMintFailure'
+  /v1/auth/token/validate:
+    post:
+      summary: Validate bearer token signature/ttl/scope
+      operationId: validateToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenValidateRequest'
+      responses:
+        '200':
+          description: Token valid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenValidateSuccess'
+        '401':
+          description: Token invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenValidateFailure'
+  /v1/auth/enroll/exchange:
+    post:
+      summary: Exchange one-time enrollment code for client credentials
+      operationId: exchangeEnrollmentCode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enrollment_code]
+              properties:
+                enrollment_code:
+                  type: string
+      responses:
+        '200':
+          description: Enrollment exchange succeeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrollmentExchangeSuccess'
+        '401':
+          description: Enrollment exchange denied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrollmentExchangeFailure'
+  /v1/admin/tenants:
+    post:
+      summary: Create tenant registry entry
+      operationId: createTenant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tenant_id, name]
+              properties:
+                tenant_id:
+                  type: string
+                name:
+                  type: string
+                state:
+                  $ref: '#/components/schemas/TenantState'
+                entitlement_state:
+                  $ref: '#/components/schemas/EntitlementState'
+                actor:
+                  type: string
+      responses:
+        '201':
+          description: Tenant created
+  /v1/admin/instances:
+    post:
+      summary: Create instance registry entry
+      operationId: createInstance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [instance_id, tenant_id, source]
+              properties:
+                instance_id:
+                  type: string
+                tenant_id:
+                  type: string
+                source:
+                  type: string
+                state:
+                  $ref: '#/components/schemas/InstanceState'
+                allowed_services:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/ServiceScope'
+                actor:
+                  type: string
+      responses:
+        '201':
+          description: Instance created
+  /v1/admin/enrollment-codes:
+    post:
+      summary: Issue one-time enrollment code
+      operationId: issueEnrollmentCode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tenant_id, instance_id]
+              properties:
+                tenant_id:
+                  type: string
+                instance_id:
+                  type: string
+                requested_by:
+                  type: string
+                ttl_seconds:
+                  type: integer
+                  minimum: 1
+      responses:
+        '201':
+          description: Enrollment code issued
+  /v1/admin/instances/{instance_id}/rotate-secret:
+    post:
+      summary: Start dual-secret overlap rotation
+      operationId: startRotation
+      parameters:
+        - in: path
+          name: instance_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                requested_by:
+                  type: string
+                overlap_seconds:
+                  type: integer
+                  minimum: 1
+      responses:
+        '200':
+          description: Rotation started
+  /v1/admin/instances/{instance_id}/complete-rotation:
+    post:
+      summary: Promote next secret and revoke previous current
+      operationId: completeRotation
+      parameters:
+        - in: path
+          name: instance_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                requested_by:
+                  type: string
+      responses:
+        '200':
+          description: Rotation completed
+  /v1/admin/instances/{instance_id}/revoke-secret:
+    post:
+      summary: Revoke specified secret version
+      operationId: revokeSecret
+      parameters:
+        - in: path
+          name: instance_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [secret_version_id]
+              properties:
+                secret_version_id:
+                  type: string
+                requested_by:
+                  type: string
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: Secret revoked
+  /v1/admin/degraded-mode:
+    post:
+      summary: Toggle control-plane outage mode
+      operationId: setDegradedMode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [outage_active]
+              properties:
+                outage_active:
+                  type: boolean
+                actor:
+                  type: string
+      responses:
+        '200':
+          description: Outage mode updated
+  /v1/admin/audit-events:
+    get:
+      summary: List auth audit events
+      operationId: listAuditEvents
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        '200':
+          description: Audit events list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [events]
+                properties:
+                  events:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuthAuditEvent'
+components:
+  schemas:
+    ServiceScope:
+      type: string
+      enum: [reg, rrs]
+    TenantState:
+      type: string
+      enum: [active, suspended, disabled]
+    EntitlementState:
+      type: string
+      enum: [active, suspended, disabled]
+    InstanceState:
+      type: string
+      enum: [active, suspended, disabled]
+    AuthDenyReasonCode:
+      type: string
+      enum:
+        - none
+        - denied_auth_control_plane_outage
+        - denied_invalid_client
+        - denied_invalid_secret
+        - denied_invalid_grant
+        - denied_tenant_not_entitled
+        - denied_tenant_suspended
+        - denied_tenant_disabled
+        - denied_instance_suspended
+        - denied_instance_disabled
+        - denied_service_not_allowed
+        - denied_invalid_enrollment_code
+        - denied_enrollment_code_expired
+        - denied_enrollment_code_used
+        - denied_token_expired
+        - denied_token_invalid_signature
+        - denied_token_wrong_service_scope
+        - denied_token_malformed
+    TokenMintRequest:
+      type: object
+      required: [client_id, client_secret, service_scope]
+      properties:
+        grant_type:
+          type: string
+          enum: [client_credentials]
+        flow:
+          type: string
+          enum: [mint, refresh]
+        client_id:
+          type: string
+        client_secret:
+          type: string
+        service_scope:
+          $ref: '#/components/schemas/ServiceScope'
+    TokenMintSuccess:
+      type: object
+      required:
+        - success
+        - token_type
+        - access_token
+        - expires_in
+        - scope
+        - issued_at
+        - expires_at
+        - tenant_id
+        - instance_id
+        - source
+      properties:
+        success:
+          type: boolean
+          const: true
+        token_type:
+          type: string
+          const: bearer
+        access_token:
+          type: string
+        expires_in:
+          type: integer
+        scope:
+          $ref: '#/components/schemas/ServiceScope'
+        issued_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        tenant_id:
+          type: string
+        instance_id:
+          type: string
+        source:
+          type: string
+    TokenMintFailure:
+      type: object
+      required: [success, reason_code]
+      properties:
+        success:
+          type: boolean
+          const: false
+        reason_code:
+          $ref: '#/components/schemas/AuthDenyReasonCode'
+    TokenValidateRequest:
+      type: object
+      required: [access_token]
+      properties:
+        access_token:
+          type: string
+        expected_service_scope:
+          $ref: '#/components/schemas/ServiceScope'
+    TokenClaims:
+      type: object
+      required:
+        - iss
+        - sub
+        - aud
+        - jti
+        - iat
+        - exp
+        - service_scope
+        - tenant_id
+        - instance_id
+        - source
+      properties:
+        iss:
+          type: string
+        sub:
+          type: string
+        aud:
+          type: string
+        jti:
+          type: string
+        iat:
+          type: integer
+        exp:
+          type: integer
+        service_scope:
+          $ref: '#/components/schemas/ServiceScope'
+        tenant_id:
+          type: string
+        instance_id:
+          type: string
+        source:
+          type: string
+    TokenValidateSuccess:
+      type: object
+      required: [success, claims]
+      properties:
+        success:
+          type: boolean
+          const: true
+        claims:
+          $ref: '#/components/schemas/TokenClaims'
+    TokenValidateFailure:
+      type: object
+      required: [success, reason_code]
+      properties:
+        success:
+          type: boolean
+          const: false
+        reason_code:
+          $ref: '#/components/schemas/AuthDenyReasonCode'
+    EnrollmentExchangeSuccess:
+      type: object
+      required:
+        - success
+        - tenant_id
+        - instance_id
+        - client_id
+        - client_secret
+        - secret_version_id
+      properties:
+        success:
+          type: boolean
+          const: true
+        tenant_id:
+          type: string
+        instance_id:
+          type: string
+        client_id:
+          type: string
+        client_secret:
+          type: string
+        secret_version_id:
+          type: string
+    EnrollmentExchangeFailure:
+      type: object
+      required: [success, reason_code]
+      properties:
+        success:
+          type: boolean
+          const: false
+        reason_code:
+          $ref: '#/components/schemas/AuthDenyReasonCode'
+    AuthAuditEvent:
+      type: object
+      required: [event_id, event_type, occurred_at, metadata]
+      properties:
+        event_id:
+          type: string
+        event_type:
+          type: string
+        occurred_at:
+          type: string
+          format: date-time
+        actor:
+          type: string
+        tenant_id:
+          type: string
+        instance_id:
+          type: string
+        client_id:
+          type: string
+        service_scope:
+          $ref: '#/components/schemas/ServiceScope'
+        deny_reason_code:
+          $ref: '#/components/schemas/AuthDenyReasonCode'
+        metadata:
+          type: object
+          additionalProperties: true
