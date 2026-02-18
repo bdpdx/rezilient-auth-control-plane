@@ -213,11 +213,27 @@ test('rotation update concurrency prevents double-start and keeps state valid', 
     assert.ok(successStart);
     assert.ok(failedStart);
 
+    if (!successStart || !successStart.success) {
+        return;
+    }
+
+    if (!successStart.value) {
+        return;
+    }
+
     if (failedStart && !failedStart.success) {
         const failureMessage = failedStart.message ?? '';
 
         assert.match(failureMessage, /rotation already in progress/);
     }
+
+    const adoptionMint = fixtureA.control_plane.services.token.mintToken({
+        client_id: exchanged.client_id,
+        client_secret: successStart.value.next_client_secret,
+        service_scope: 'reg',
+    });
+
+    assert.equal(adoptionMint.success, true);
 
     const completed = fixtureB.control_plane.services.rotation.completeRotation({
         instance_id: 'instance-dev-01',

@@ -9,6 +9,8 @@
    mint a replacement secret version.
 4. Confirm SN instance adopts the replacement credential.
 5. Complete rotation via `POST /v1/admin/instances/{instance_id}/complete-rotation`.
+   - ACP now rejects completion until the next secret has been adopted
+     (`reason_code=secret_rotation_not_adopted`).
 6. Verify deny/mint audit trail in `GET /v1/admin/audit-events`.
 
 ## 2. Enrollment Failure

@@ -176,6 +176,18 @@ paths:
       responses:
         '201':
           description: Enrollment code issued
+        '400':
+          description: Invalid enrollment-code request payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminErrorResponse'
+        '404':
+          description: Tenant/instance mapping not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminErrorResponse'
   /v1/admin/instances/{instance_id}/rotate-secret:
     post:
       summary: Start dual-secret overlap rotation
@@ -201,6 +213,24 @@ paths:
       responses:
         '200':
           description: Rotation started
+        '400':
+          description: Invalid rotation request payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminErrorResponse'
+        '404':
+          description: Instance or secret version not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminErrorResponse'
+        '409':
+          description: Rotation conflict (already in progress or not enrolled)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminErrorResponse'
   /v1/admin/instances/{instance_id}/complete-rotation:
     post:
       summary: Promote next secret and revoke previous current
@@ -223,6 +253,18 @@ paths:
       responses:
         '200':
           description: Rotation completed
+        '404':
+          description: Instance or secret version not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminErrorResponse'
+        '409':
+          description: Rotation not started or next secret not adopted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminErrorResponse'
   /v1/admin/instances/{instance_id}/revoke-secret:
     post:
       summary: Revoke specified secret version
@@ -250,6 +292,12 @@ paths:
       responses:
         '200':
           description: Secret revoked
+        '404':
+          description: Instance or secret version not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminErrorResponse'
   /v1/admin/degraded-mode:
     post:
       summary: Toggle control-plane outage mode
@@ -269,6 +317,12 @@ paths:
       responses:
         '200':
           description: Outage mode updated
+        '400':
+          description: Invalid outage-mode payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminErrorResponse'
   /v1/admin/audit-events:
     get:
       summary: List auth audit events
@@ -293,6 +347,12 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/AuthAuditEvent'
+        '400':
+          description: Invalid query parameter
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminErrorResponse'
 components:
   schemas:
     ServiceScope:
@@ -307,6 +367,17 @@ components:
     InstanceState:
       type: string
       enum: [active, suspended, disabled]
+    AdminErrorResponse:
+      type: object
+      required: [error, reason_code, message]
+      properties:
+        error:
+          type: string
+          enum: [bad_request, not_found, conflict]
+        reason_code:
+          type: string
+        message:
+          type: string
     AuthDenyReasonCode:
       type: string
       enum:

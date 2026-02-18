@@ -406,6 +406,12 @@ export class RegistryService {
                 throw new Error(`next secret version not found: ${nextId}`);
             }
 
+            if (!nextSecret.adopted_at) {
+                throw new Error(
+                    `next secret version not adopted: ${nextId}`,
+                );
+            }
+
             const nowIso = this.clock.now().toISOString();
             const oldVersionId = credentials.current_secret_version_id;
             const oldSecret = credentials.secret_versions.find(

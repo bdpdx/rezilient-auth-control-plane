@@ -102,9 +102,17 @@ function asOptionalString(value: unknown): string | undefined {
     return value;
 }
 
-function asNumber(value: unknown, fieldName: string): number {
-    if (typeof value !== 'number' || Number.isNaN(value) || !Number.isFinite(value)) {
-        throw new Error(`${fieldName} must be a valid number`);
+function asPositiveInteger(value: unknown, fieldName: string): number {
+    if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+        throw new Error(`${fieldName} must be a positive integer`);
+    }
+
+    return value;
+}
+
+function asBoolean(value: unknown, fieldName: string): boolean {
+    if (typeof value !== 'boolean') {
+        throw new Error(`${fieldName} must be a boolean`);
     }
 
     return value;
@@ -126,6 +134,161 @@ function asStringArray(value: unknown, fieldName: string): string[] {
     }
 
     return result;
+}
+
+function parseAuditEventLimit(limitParam: string | null): number | undefined {
+    if (limitParam === null) {
+        return undefined;
+    }
+
+    const parsed = Number(limitParam);
+
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+        throw new Error('limit must be a positive integer');
+    }
+
+    return parsed;
+}
+
+interface LifecycleErrorMapping {
+    statusCode: 400 | 404 | 409;
+    error: 'bad_request' | 'not_found' | 'conflict';
+    reasonCode: string;
+}
+
+const LIFECYCLE_ERROR_MAPPINGS: Array<{
+    matches: (message: string) => boolean;
+    mapping: LifecycleErrorMapping;
+}> = [
+    {
+        matches: (message) => message.startsWith('tenant not found: '),
+        mapping: {
+            statusCode: 404,
+            error: 'not_found',
+            reasonCode: 'tenant_not_found',
+        },
+    },
+    {
+        matches: (message) => message.startsWith('instance not found: '),
+        mapping: {
+            statusCode: 404,
+            error: 'not_found',
+            reasonCode: 'instance_not_found',
+        },
+    },
+    {
+        matches: (message) => message === 'tenant/instance mapping not found',
+        mapping: {
+            statusCode: 404,
+            error: 'not_found',
+            reasonCode: 'tenant_instance_mapping_not_found',
+        },
+    },
+    {
+        matches: (message) => message.startsWith('secret version not found: '),
+        mapping: {
+            statusCode: 404,
+            error: 'not_found',
+            reasonCode: 'secret_version_not_found',
+        },
+    },
+    {
+        matches: (message) => message.startsWith('next secret version not found: '),
+        mapping: {
+            statusCode: 404,
+            error: 'not_found',
+            reasonCode: 'secret_version_not_found',
+        },
+    },
+    {
+        matches: (message) => message.startsWith('tenant already exists: '),
+        mapping: {
+            statusCode: 409,
+            error: 'conflict',
+            reasonCode: 'tenant_already_exists',
+        },
+    },
+    {
+        matches: (message) => message.startsWith('instance already exists: '),
+        mapping: {
+            statusCode: 409,
+            error: 'conflict',
+            reasonCode: 'instance_already_exists',
+        },
+    },
+    {
+        matches: (message) => message.startsWith('source mapping already exists: '),
+        mapping: {
+            statusCode: 409,
+            error: 'conflict',
+            reasonCode: 'source_mapping_already_exists',
+        },
+    },
+    {
+        matches: (message) => message === 'instance has no credentials to rotate',
+        mapping: {
+            statusCode: 409,
+            error: 'conflict',
+            reasonCode: 'instance_not_enrolled',
+        },
+    },
+    {
+        matches: (message) => message === 'rotation already in progress',
+        mapping: {
+            statusCode: 409,
+            error: 'conflict',
+            reasonCode: 'secret_rotation_in_progress',
+        },
+    },
+    {
+        matches: (message) => message === 'no next secret version to promote',
+        mapping: {
+            statusCode: 409,
+            error: 'conflict',
+            reasonCode: 'secret_rotation_not_started',
+        },
+    },
+    {
+        matches: (message) => message.startsWith('next secret version not adopted: '),
+        mapping: {
+            statusCode: 409,
+            error: 'conflict',
+            reasonCode: 'secret_rotation_not_adopted',
+        },
+    },
+];
+
+function mapLifecycleError(error: unknown): {
+    statusCode: number;
+    payload: Record<string, unknown>;
+} {
+    const message = error instanceof Error
+        ? error.message
+        : 'unknown_error';
+
+    for (const entry of LIFECYCLE_ERROR_MAPPINGS) {
+        if (!entry.matches(message)) {
+            continue;
+        }
+
+        return {
+            statusCode: entry.mapping.statusCode,
+            payload: {
+                error: entry.mapping.error,
+                reason_code: entry.mapping.reasonCode,
+                message,
+            },
+        };
+    }
+
+    return {
+        statusCode: 400,
+        payload: {
+            error: 'bad_request',
+            reason_code: 'invalid_admin_request',
+            message,
+        },
+    };
 }
 
 function isAdminRequest(pathname: string): boolean {
@@ -393,8 +556,9 @@ export function createControlPlaneServer(
             }
 
             if (method === 'GET' && pathname === '/v1/admin/audit-events') {
-                const limitParam = parsedUrl.searchParams.get('limit');
-                const limit = limitParam ? Number(limitParam) : undefined;
+                const limit = parseAuditEventLimit(
+                    parsedUrl.searchParams.get('limit'),
+                );
                 const events = services.audit.list(limit);
 
                 sendJson(response, 200, {
@@ -515,9 +679,9 @@ export function createControlPlaneServer(
                     tenant_id: asString(body.tenant_id, 'tenant_id'),
                     instance_id: asString(body.instance_id, 'instance_id'),
                     requested_by: asOptionalString(body.requested_by),
-                    ttl_seconds: body.ttl_seconds
-                        ? asNumber(body.ttl_seconds, 'ttl_seconds')
-                        : 900,
+                    ttl_seconds: body.ttl_seconds === undefined
+                        ? 900
+                        : asPositiveInteger(body.ttl_seconds, 'ttl_seconds'),
                 });
 
                 sendJson(response, 201, result as unknown as Record<string, unknown>);
@@ -564,7 +728,10 @@ export function createControlPlaneServer(
             }
 
             if (pathname === '/v1/admin/degraded-mode') {
-                const outageActive = Boolean(body.outage_active);
+                const outageActive = asBoolean(
+                    body.outage_active,
+                    'outage_active',
+                );
 
                 services.token.setOutageMode(
                     outageActive,
@@ -585,9 +752,12 @@ export function createControlPlaneServer(
                 const result = services.rotation.startRotation({
                     instance_id: instanceId,
                     requested_by: asOptionalString(body.requested_by),
-                    overlap_seconds: body.overlap_seconds
-                        ? asNumber(body.overlap_seconds, 'overlap_seconds')
-                        : 86400,
+                    overlap_seconds: body.overlap_seconds === undefined
+                        ? 86400
+                        : asPositiveInteger(
+                            body.overlap_seconds,
+                            'overlap_seconds',
+                        ),
                 });
 
                 sendJson(response, 200, result as unknown as Record<string, unknown>);
@@ -719,14 +889,9 @@ export function createControlPlaneServer(
                 return;
             }
 
-            const message = error instanceof Error
-                ? error.message
-                : 'unknown_error';
+            const mapped = mapLifecycleError(error);
 
-            sendJson(response, 400, {
-                error: 'bad_request',
-                message,
-            });
+            sendJson(response, mapped.statusCode, mapped.payload);
         }
     });
 }

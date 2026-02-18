@@ -73,6 +73,23 @@ async function postRaw(
     };
 }
 
+async function postJson(
+    baseUrl: string,
+    path: string,
+    body: Record<string, unknown>,
+    adminToken?: string,
+): Promise<ResponseData> {
+    const headers: Record<string, string> = {
+        'content-type': 'application/json',
+    };
+
+    if (adminToken) {
+        headers['x-rezilient-admin-token'] = adminToken;
+    }
+
+    return postRaw(baseUrl, path, JSON.stringify(body), headers);
+}
+
 test('admin endpoints require token when configured', async () => {
     const fixture = createFixture();
     const server = createControlPlaneServer(fixture.control_plane.services, {
@@ -255,6 +272,203 @@ test('admin overview surfaces degraded-mode and enrollment counters', async () =
         const enrollment = response.body.enrollment as Record<string, unknown>;
         assert.equal(enrollment.codes_issued_total, 1);
         assert.equal(enrollment.codes_exchanged_total, 1);
+    } finally {
+        await closeServer(server);
+    }
+});
+
+test('admin lifecycle endpoints return not_found/conflict reason codes', async () => {
+    const fixture = createFixture();
+    fixture.control_plane.services.registry.createTenant({
+        tenant_id: 'tenant-acme',
+        name: 'Acme',
+    });
+
+    const server = createControlPlaneServer(fixture.control_plane.services, {
+        adminToken: 'admin-secret',
+    });
+    const baseUrl = await listen(server);
+
+    try {
+        const missingInstanceState = await postJson(
+            baseUrl,
+            '/v1/admin/instances/instance-missing/state',
+            {
+                state: 'disabled',
+            },
+            'admin-secret',
+        );
+
+        assert.equal(missingInstanceState.status, 404);
+        assert.equal(missingInstanceState.body.error, 'not_found');
+        assert.equal(
+            missingInstanceState.body.reason_code,
+            'instance_not_found',
+        );
+
+        const duplicateTenant = await postJson(
+            baseUrl,
+            '/v1/admin/tenants',
+            {
+                tenant_id: 'tenant-acme',
+                name: 'Acme duplicate',
+            },
+            'admin-secret',
+        );
+
+        assert.equal(duplicateTenant.status, 409);
+        assert.equal(duplicateTenant.body.error, 'conflict');
+        assert.equal(
+            duplicateTenant.body.reason_code,
+            'tenant_already_exists',
+        );
+    } finally {
+        await closeServer(server);
+    }
+});
+
+test('admin lifecycle endpoints enforce strict validation', async () => {
+    const fixture = createFixture();
+    const credentials = bootstrapRegistryAndCredentials(fixture);
+
+    const server = createControlPlaneServer(fixture.control_plane.services, {
+        adminToken: 'admin-secret',
+    });
+    const baseUrl = await listen(server);
+
+    try {
+        const invalidLimit = await getJson(
+            baseUrl,
+            '/v1/admin/audit-events?limit=0',
+            'admin-secret',
+        );
+
+        assert.equal(invalidLimit.status, 400);
+        assert.equal(invalidLimit.body.reason_code, 'invalid_admin_request');
+        assert.equal(
+            invalidLimit.body.message,
+            'limit must be a positive integer',
+        );
+
+        const invalidTtl = await postJson(
+            baseUrl,
+            '/v1/admin/enrollment-codes',
+            {
+                tenant_id: credentials.tenant_id,
+                instance_id: credentials.instance_id,
+                ttl_seconds: 0,
+            },
+            'admin-secret',
+        );
+
+        assert.equal(invalidTtl.status, 400);
+        assert.equal(invalidTtl.body.reason_code, 'invalid_admin_request');
+        assert.equal(
+            invalidTtl.body.message,
+            'ttl_seconds must be a positive integer',
+        );
+
+        const invalidOverlap = await postJson(
+            baseUrl,
+            `/v1/admin/instances/${credentials.instance_id}/rotate-secret`,
+            {
+                overlap_seconds: 0,
+            },
+            'admin-secret',
+        );
+
+        assert.equal(invalidOverlap.status, 400);
+        assert.equal(invalidOverlap.body.reason_code, 'invalid_admin_request');
+        assert.equal(
+            invalidOverlap.body.message,
+            'overlap_seconds must be a positive integer',
+        );
+
+        const invalidOutageToggle = await postJson(
+            baseUrl,
+            '/v1/admin/degraded-mode',
+            {
+                outage_active: 'true',
+            },
+            'admin-secret',
+        );
+
+        assert.equal(invalidOutageToggle.status, 400);
+        assert.equal(
+            invalidOutageToggle.body.reason_code,
+            'invalid_admin_request',
+        );
+        assert.equal(
+            invalidOutageToggle.body.message,
+            'outage_active must be a boolean',
+        );
+    } finally {
+        await closeServer(server);
+    }
+});
+
+test('rotation completion requires adopted next secret', async () => {
+    const fixture = createFixture();
+    const credentials = bootstrapRegistryAndCredentials(fixture);
+
+    const server = createControlPlaneServer(fixture.control_plane.services, {
+        adminToken: 'admin-secret',
+    });
+    const baseUrl = await listen(server);
+
+    try {
+        const started = await postJson(
+            baseUrl,
+            `/v1/admin/instances/${credentials.instance_id}/rotate-secret`,
+            {
+                overlap_seconds: 600,
+            },
+            'admin-secret',
+        );
+
+        assert.equal(started.status, 200);
+        const nextSecret = String(started.body.next_client_secret);
+        const nextVersion = String(started.body.next_secret_version_id);
+        assert.ok(nextSecret.startsWith('sec_'));
+        assert.ok(nextVersion.startsWith('sv_'));
+
+        const completeBeforeAdoption = await postJson(
+            baseUrl,
+            `/v1/admin/instances/${credentials.instance_id}/complete-rotation`,
+            {},
+            'admin-secret',
+        );
+
+        assert.equal(completeBeforeAdoption.status, 409);
+        assert.equal(
+            completeBeforeAdoption.body.reason_code,
+            'secret_rotation_not_adopted',
+        );
+
+        const adoptMint = await postJson(
+            baseUrl,
+            '/v1/auth/token',
+            {
+                client_id: credentials.client_id,
+                client_secret: nextSecret,
+                service_scope: 'reg',
+            },
+        );
+
+        assert.equal(adoptMint.status, 200);
+
+        const completeAfterAdoption = await postJson(
+            baseUrl,
+            `/v1/admin/instances/${credentials.instance_id}/complete-rotation`,
+            {},
+            'admin-secret',
+        );
+
+        assert.equal(completeAfterAdoption.status, 200);
+        assert.equal(
+            completeAfterAdoption.body.new_secret_version_id,
+            nextVersion,
+        );
     } finally {
         await closeServer(server);
     }
