@@ -1,6 +1,7 @@
 # src Index
 
-- `index.ts`: bootstraps in-memory control plane and starts HTTP server.
+- `index.ts`: bootstraps control plane, validates runtime config, and defaults
+  to durable SQLite-backed state.
 - `server.ts`: HTTP routing for admin, enrollment, token, and health endpoints.
 - `server.ts`: HTTP routing for admin, enrollment, token, and health endpoints,
   plus RS-14 admin overview and instance/tenant read APIs.
@@ -9,6 +10,9 @@
 - `utils/crypto.ts`: token signing/verification and secret hashing helpers.
 - `audit/audit.service.ts`: append-only audit event recorder.
 - `audit/types.ts`: audit event types and payload shape.
+- `persistence/state-store.ts`: shared persistence interface for ACP state.
+- `persistence/sqlite-state-store.ts`: SQLite-backed durable state store.
+- `persistence/in-memory-state-store.ts`: in-memory store used by tests.
 - `registry/types.ts`: tenant/instance/credential domain models.
 - `registry/registry.service.ts`: registry lifecycle operations.
 - `enrollment/enrollment.service.ts`: enrollment code issue/exchange flow.

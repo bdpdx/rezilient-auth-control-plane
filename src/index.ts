@@ -1,6 +1,9 @@
 import { createControlPlaneServer, ControlPlaneServices } from './server';
 import { AuditService } from './audit/audit.service';
 import { EnrollmentService } from './enrollment/enrollment.service';
+import { InMemoryControlPlaneStateStore } from './persistence/in-memory-state-store';
+import { ControlPlaneStateStore } from './persistence/state-store';
+import { SqliteControlPlaneStateStore } from './persistence/sqlite-state-store';
 import { RegistryService } from './registry/registry.service';
 import { RotationService } from './rotation/rotation.service';
 import {
@@ -75,6 +78,17 @@ function parseRequiredSecretConfig(
     return value;
 }
 
+function parseRequiredStringConfig(
+    value: string | undefined,
+    keyName: string,
+): string {
+    if (!value || value.trim().length === 0) {
+        throw new Error(`${keyName} is required`);
+    }
+
+    return value.trim();
+}
+
 function parseOptionalToken(value: string | undefined): string | undefined {
     if (!value) {
         return undefined;
@@ -95,6 +109,7 @@ export interface ControlPlaneRuntimeConfig {
     admin_api_enabled: boolean;
     admin_token?: string;
     max_json_body_bytes: number;
+    persistence_db_path: string;
 }
 
 export function buildTokenServiceConfigFromEnv(
@@ -154,23 +169,34 @@ export function loadControlPlaneRuntimeConfig(
             DEFAULT_MAX_JSON_BODY_BYTES,
             'AUTH_MAX_JSON_BODY_BYTES',
         ),
+        persistence_db_path: parseRequiredStringConfig(
+            env.AUTH_PERSISTENCE_DB_PATH,
+            'AUTH_PERSISTENCE_DB_PATH',
+        ),
     };
 }
 
-export interface InMemoryControlPlane {
+export interface ControlPlane {
     services: ControlPlaneServices;
     token_config: TokenServiceConfig;
+    state_store: ControlPlaneStateStore;
 }
 
-export function createInMemoryControlPlane(
+function buildControlPlane(
+    stateStore: ControlPlaneStateStore,
     clock?: Clock,
     tokenConfig?: TokenServiceConfig,
-): InMemoryControlPlane {
+): ControlPlane {
     const runtimeClock = clock ?? new SystemClock();
     const resolvedTokenConfig = tokenConfig ?? buildTokenServiceConfigFromEnv();
-    const audit = new AuditService(runtimeClock);
-    const registry = new RegistryService(audit, runtimeClock);
-    const enrollment = new EnrollmentService(registry, audit, runtimeClock);
+    const audit = new AuditService(runtimeClock, stateStore);
+    const registry = new RegistryService(audit, runtimeClock, stateStore);
+    const enrollment = new EnrollmentService(
+        registry,
+        audit,
+        runtimeClock,
+        stateStore,
+    );
     const rotation = new RotationService(registry, audit, runtimeClock);
     const token = new TokenService(
         registry,
@@ -178,6 +204,7 @@ export function createInMemoryControlPlane(
         audit,
         runtimeClock,
         resolvedTokenConfig,
+        stateStore,
     );
 
     return {
@@ -189,12 +216,33 @@ export function createInMemoryControlPlane(
             audit,
         },
         token_config: resolvedTokenConfig,
+        state_store: stateStore,
     };
+}
+
+export function createInMemoryControlPlane(
+    clock?: Clock,
+    tokenConfig?: TokenServiceConfig,
+): ControlPlane {
+    const stateStore = new InMemoryControlPlaneStateStore();
+
+    return buildControlPlane(stateStore, clock, tokenConfig);
+}
+
+export function createDurableControlPlane(
+    persistenceDbPath: string,
+    clock?: Clock,
+    tokenConfig?: TokenServiceConfig,
+): ControlPlane {
+    const stateStore = new SqliteControlPlaneStateStore(persistenceDbPath);
+
+    return buildControlPlane(stateStore, clock, tokenConfig);
 }
 
 if (require.main === module) {
     const runtimeConfig = loadControlPlaneRuntimeConfig();
-    const controlPlane = createInMemoryControlPlane(
+    const controlPlane = createDurableControlPlane(
+        runtimeConfig.persistence_db_path,
         undefined,
         runtimeConfig.token_config,
     );

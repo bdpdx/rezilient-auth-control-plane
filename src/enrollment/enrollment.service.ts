@@ -1,6 +1,10 @@
 import { AuditService } from '../audit/audit.service';
 import { AuthDenyReasonCode } from '../constants';
+import { InMemoryControlPlaneStateStore } from '../persistence/in-memory-state-store';
+import { ControlPlaneStateStore } from '../persistence/state-store';
+import { ControlPlaneState } from '../persistence/types';
 import { RegistryService } from '../registry/registry.service';
+import { SecretVersionRecord } from '../registry/types';
 import { Clock } from '../utils/clock';
 import {
     randomToken,
@@ -43,6 +47,26 @@ export type ExchangeEnrollmentCodeResult = {
     reason_code: AuthDenyReasonCode;
 };
 
+interface ExchangeSuccessPayload {
+    success: true;
+    tenant_id: string;
+    instance_id: string;
+    client_id: string;
+    client_secret: string;
+    secret_version_id: string;
+    code_id: string;
+}
+
+interface ExchangeFailurePayload {
+    success: false;
+    reason_code: AuthDenyReasonCode;
+    code_id?: string;
+    tenant_id?: string;
+    instance_id?: string;
+}
+
+type ExchangeStateResult = ExchangeSuccessPayload | ExchangeFailurePayload;
+
 function parseSecretVersionNumber(versionId: string): number {
     const prefix = 'sv_';
 
@@ -59,15 +83,34 @@ function parseSecretVersionNumber(versionId: string): number {
     return value;
 }
 
+function nextSecretVersionId(existingVersions: SecretVersionRecord[]): string {
+    const highestVersion = existingVersions.reduce(
+        (max, secret) => Math.max(max, parseSecretVersionNumber(secret.version_id)),
+        0,
+    );
+
+    return `sv_${highestVersion + 1}`;
+}
+
+function generateUniqueClientId(state: ControlPlaneState): string {
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+        const clientId = `cli_${randomToken(12)}`;
+
+        if (!state.client_id_to_instance[clientId]) {
+            return clientId;
+        }
+    }
+
+    throw new Error('unable to allocate unique client_id');
+}
+
 export class EnrollmentService {
-    private readonly records = new Map<string, EnrollmentCodeRecord>();
-
-    private readonly codeHashToId = new Map<string, string>();
-
     constructor(
         private readonly registry: RegistryService,
         private readonly audit: AuditService,
         private readonly clock: Clock,
+        private readonly stateStore: ControlPlaneStateStore =
+            new InMemoryControlPlaneStateStore(),
     ) {}
 
     issueEnrollmentCode(input: IssueEnrollmentCodeInput): IssueEnrollmentCodeResult {
@@ -96,8 +139,10 @@ export class EnrollmentService {
             issued_by: input.requested_by,
         };
 
-        this.records.set(codeId, record);
-        this.codeHashToId.set(codeHash, codeId);
+        this.stateStore.mutate((state) => {
+            state.enrollment_records[codeId] = record;
+            state.code_hash_to_id[codeHash] = codeId;
+        });
 
         this.audit.record({
             event_type: 'enrollment_code_issued',
@@ -120,117 +165,133 @@ export class EnrollmentService {
 
     exchangeEnrollmentCode(enrollmentCode: string): ExchangeEnrollmentCodeResult {
         const codeHash = sha256Hex(enrollmentCode);
-        const codeId = this.codeHashToId.get(codeHash);
-
-        if (!codeId) {
-            this.audit.record({
-                event_type: 'token_mint_denied',
-                deny_reason_code: 'denied_invalid_enrollment_code',
-                metadata: {
-                    phase: 'enrollment_exchange',
-                },
-            });
-
-            return {
-                success: false,
-                reason_code: 'denied_invalid_enrollment_code',
-            };
-        }
-
-        const record = this.records.get(codeId);
-
-        if (!record) {
-            return {
-                success: false,
-                reason_code: 'denied_invalid_enrollment_code',
-            };
-        }
-
-        if (record.used_at) {
-            this.audit.record({
-                event_type: 'token_mint_denied',
-                tenant_id: record.tenant_id,
-                instance_id: record.instance_id,
-                deny_reason_code: 'denied_enrollment_code_used',
-                metadata: {
-                    phase: 'enrollment_exchange',
-                    code_id: record.code_id,
-                },
-            });
-
-            return {
-                success: false,
-                reason_code: 'denied_enrollment_code_used',
-            };
-        }
-
         const nowIso = this.clock.now().toISOString();
+        const stateResult = this.stateStore.mutate((state) => {
+            const codeId = state.code_hash_to_id[codeHash];
 
-        if (nowIso > record.expires_at) {
-            this.audit.record({
-                event_type: 'token_mint_denied',
+            if (!codeId) {
+                return {
+                    success: false,
+                    reason_code: 'denied_invalid_enrollment_code',
+                } as ExchangeFailurePayload;
+            }
+
+            const record = state.enrollment_records[codeId];
+
+            if (!record) {
+                return {
+                    success: false,
+                    reason_code: 'denied_invalid_enrollment_code',
+                } as ExchangeFailurePayload;
+            }
+
+            if (record.used_at) {
+                return {
+                    success: false,
+                    reason_code: 'denied_enrollment_code_used',
+                    code_id: record.code_id,
+                    tenant_id: record.tenant_id,
+                    instance_id: record.instance_id,
+                } as ExchangeFailurePayload;
+            }
+
+            if (nowIso > record.expires_at) {
+                return {
+                    success: false,
+                    reason_code: 'denied_enrollment_code_expired',
+                    code_id: record.code_id,
+                    tenant_id: record.tenant_id,
+                    instance_id: record.instance_id,
+                } as ExchangeFailurePayload;
+            }
+
+            const instance = state.instances[record.instance_id];
+
+            if (!instance) {
+                return {
+                    success: false,
+                    reason_code: 'denied_invalid_enrollment_code',
+                    code_id: record.code_id,
+                    tenant_id: record.tenant_id,
+                    instance_id: record.instance_id,
+                } as ExchangeFailurePayload;
+            }
+
+            if (instance.client_credentials) {
+                return {
+                    success: false,
+                    reason_code: 'denied_enrollment_code_used',
+                    code_id: record.code_id,
+                    tenant_id: record.tenant_id,
+                    instance_id: record.instance_id,
+                } as ExchangeFailurePayload;
+            }
+
+            const clientId = generateUniqueClientId(state);
+            const clientSecret = `sec_${randomToken(32)}`;
+            const secretVersionId = nextSecretVersionId([]);
+            const secretVersion: SecretVersionRecord = {
+                version_id: secretVersionId,
+                secret_hash: sha256Hex(clientSecret),
+                created_at: nowIso,
+            };
+
+            instance.client_credentials = {
+                client_id: clientId,
+                current_secret_version_id: secretVersionId,
+                secret_versions: [secretVersion],
+            };
+            instance.updated_at = nowIso;
+            state.client_id_to_instance[clientId] = instance.instance_id;
+            record.used_at = nowIso;
+
+            return {
+                success: true,
                 tenant_id: record.tenant_id,
                 instance_id: record.instance_id,
-                deny_reason_code: 'denied_enrollment_code_expired',
-                metadata: {
-                    phase: 'enrollment_exchange',
-                    code_id: record.code_id,
-                },
-            });
-
-            return {
-                success: false,
-                reason_code: 'denied_enrollment_code_expired',
-            };
-        }
-
-        const instance = this.registry.getInstance(record.instance_id);
-
-        if (!instance) {
-            return {
-                success: false,
-                reason_code: 'denied_invalid_enrollment_code',
-            };
-        }
-
-        const clientId = `cli_${randomToken(12)}`;
-        const clientSecret = `sec_${randomToken(32)}`;
-        const previousSecretVersions =
-            instance.client_credentials?.secret_versions ?? [];
-        const highestVersion = previousSecretVersions.reduce(
-            (max, secret) => Math.max(max, parseSecretVersionNumber(secret.version_id)),
-            0,
-        );
-        const nextVersion = highestVersion + 1;
-        const secretVersionId = `sv_${nextVersion}`;
-
-        this.registry.setInitialCredentials({
-            instance_id: instance.instance_id,
-            client_id: clientId,
-            version_id: secretVersionId,
-            secret_hash: sha256Hex(clientSecret),
+                client_id: clientId,
+                client_secret: clientSecret,
+                secret_version_id: secretVersionId,
+                code_id: record.code_id,
+            } as ExchangeSuccessPayload;
         });
 
-        record.used_at = nowIso;
+        if (!stateResult.success) {
+            this.audit.record({
+                event_type: 'token_mint_denied',
+                tenant_id: stateResult.tenant_id,
+                instance_id: stateResult.instance_id,
+                deny_reason_code: stateResult.reason_code,
+                metadata: {
+                    phase: 'enrollment_exchange',
+                    code_id: stateResult.code_id,
+                },
+            });
+
+            return {
+                success: false,
+                reason_code: stateResult.reason_code,
+            };
+        }
 
         this.audit.record({
             event_type: 'enrollment_code_exchanged',
-            tenant_id: record.tenant_id,
-            instance_id: record.instance_id,
-            client_id: clientId,
+            tenant_id: stateResult.tenant_id,
+            instance_id: stateResult.instance_id,
+            client_id: stateResult.client_id,
             metadata: {
-                code_id: record.code_id,
-                secret_version_id: secretVersionId,
+                code_id: stateResult.code_id,
+                secret_version_id: stateResult.secret_version_id,
             },
         });
 
         return {
             success: true,
-            tenant_id: record.tenant_id,
-            instance_id: record.instance_id,
-            client_id: clientId,
-            client_secret: clientSecret,
-            secret_version_id: secretVersionId,
+            tenant_id: stateResult.tenant_id,
+            instance_id: stateResult.instance_id,
+            client_id: stateResult.client_id,
+            client_secret: stateResult.client_secret,
+            secret_version_id: stateResult.secret_version_id,
         };
     }
 }

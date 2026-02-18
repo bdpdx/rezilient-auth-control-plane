@@ -5,6 +5,8 @@ import {
     isServiceScope,
 } from '../constants';
 import { AuditService } from '../audit/audit.service';
+import { InMemoryControlPlaneStateStore } from '../persistence/in-memory-state-store';
+import { ControlPlaneStateStore } from '../persistence/state-store';
 import { RegistryService } from '../registry/registry.service';
 import {
     ClientCredentialsRecord,
@@ -138,30 +140,32 @@ function isSecretActive(secret: {
 }
 
 export class TokenService {
-    private outageActive = false;
-
     constructor(
         private readonly registry: RegistryService,
         private readonly rotation: RotationService,
         private readonly audit: AuditService,
         private readonly clock: Clock,
         private readonly config: TokenServiceConfig,
+        private readonly stateStore: ControlPlaneStateStore =
+            new InMemoryControlPlaneStateStore(),
     ) {}
 
     setOutageMode(active: boolean, actor?: string): void {
-        this.outageActive = active;
+        this.stateStore.mutate((state) => {
+            state.outage_active = active;
+        });
 
         this.audit.record({
             event_type: 'control_plane_outage_mode_changed',
             actor,
             metadata: {
-                outage_active: this.outageActive,
+                outage_active: this.isOutageModeActive(),
             },
         });
     }
 
     isOutageModeActive(): boolean {
-        return this.outageActive;
+        return this.stateStore.read().outage_active;
     }
 
     mintToken(request: TokenMintRequest): TokenMintResult {
@@ -176,7 +180,7 @@ export class TokenService {
             return this.denyMint(request, 'denied_service_not_allowed');
         }
 
-        if (this.outageActive) {
+        if (this.isOutageModeActive()) {
             return this.denyMint(
                 request,
                 'denied_auth_control_plane_outage',
@@ -402,7 +406,7 @@ export class TokenService {
     }
 
     evaluateRefreshDuringOutage(tokenExpiresAtIso: string): RefreshDecision {
-        if (!this.outageActive) {
+        if (!this.isOutageModeActive()) {
             return {
                 action: 'refresh_allowed',
                 reason_code: 'none',

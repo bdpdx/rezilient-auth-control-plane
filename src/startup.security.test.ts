@@ -9,6 +9,7 @@ function buildEnv(
         AUTH_SIGNING_KEY: '0123456789abcdef0123456789abcdef',
         AUTH_ENABLE_ADMIN_ENDPOINTS: 'true',
         AUTH_ADMIN_TOKEN: 'admin-token-0123456789abcdef',
+        AUTH_PERSISTENCE_DB_PATH: '/tmp/rez-auth-control-plane.test.sqlite',
         ...overrides,
     };
 }
@@ -37,4 +38,12 @@ test('startup config allows omitted AUTH_ADMIN_TOKEN when admin API is disabled'
 
     assert.equal(config.admin_api_enabled, false);
     assert.equal(config.admin_token, undefined);
+});
+
+test('startup config fails when AUTH_PERSISTENCE_DB_PATH is missing', () => {
+    assert.throws(() => {
+        loadControlPlaneRuntimeConfig(buildEnv({
+            AUTH_PERSISTENCE_DB_PATH: undefined,
+        }));
+    }, /AUTH_PERSISTENCE_DB_PATH is required/);
 });

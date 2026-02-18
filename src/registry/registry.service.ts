@@ -5,6 +5,9 @@ import {
     TENANT_STATES,
 } from '../constants';
 import { AuditService } from '../audit/audit.service';
+import { InMemoryControlPlaneStateStore } from '../persistence/in-memory-state-store';
+import { ControlPlaneStateStore } from '../persistence/state-store';
+import { ControlPlaneState } from '../persistence/types';
 import { Clock } from '../utils/clock';
 import {
     AddSecretVersionInput,
@@ -43,46 +46,46 @@ function cloneTenant(tenant: TenantRecord): TenantRecord {
 }
 
 export class RegistryService {
-    private readonly tenants = new Map<string, TenantRecord>();
-
-    private readonly instances = new Map<string, InstanceRecord>();
-
-    private readonly clientIdToInstance = new Map<string, string>();
-
     constructor(
         private readonly audit: AuditService,
         private readonly clock: Clock,
+        private readonly stateStore: ControlPlaneStateStore =
+            new InMemoryControlPlaneStateStore(),
     ) {}
 
     createTenant(input: CreateTenantInput): TenantRecord {
-        if (this.tenants.has(input.tenant_id)) {
-            throw new Error(`tenant already exists: ${input.tenant_id}`);
-        }
+        const tenant = this.stateStore.mutate((state) => {
+            if (state.tenants[input.tenant_id]) {
+                throw new Error(`tenant already exists: ${input.tenant_id}`);
+            }
 
-        const state = input.state ?? 'active';
-        const entitlementState = input.entitlement_state ?? 'active';
+            const stateValue = input.state ?? 'active';
+            const entitlementState = input.entitlement_state ?? 'active';
 
-        if (!TENANT_STATES.includes(state)) {
-            throw new Error(`invalid tenant state: ${state}`);
-        }
+            if (!TENANT_STATES.includes(stateValue)) {
+                throw new Error(`invalid tenant state: ${stateValue}`);
+            }
 
-        if (!ENTITLEMENT_STATES.includes(entitlementState)) {
-            throw new Error(
-                `invalid entitlement state: ${entitlementState}`,
-            );
-        }
+            if (!ENTITLEMENT_STATES.includes(entitlementState)) {
+                throw new Error(
+                    `invalid entitlement state: ${entitlementState}`,
+                );
+            }
 
-        const nowIso = this.clock.now().toISOString();
-        const tenant: TenantRecord = {
-            tenant_id: input.tenant_id,
-            name: input.name,
-            state,
-            entitlement_state: entitlementState,
-            created_at: nowIso,
-            updated_at: nowIso,
-        };
+            const nowIso = this.clock.now().toISOString();
+            const created: TenantRecord = {
+                tenant_id: input.tenant_id,
+                name: input.name,
+                state: stateValue,
+                entitlement_state: entitlementState,
+                created_at: nowIso,
+                updated_at: nowIso,
+            };
 
-        this.tenants.set(tenant.tenant_id, tenant);
+            state.tenants[created.tenant_id] = created;
+
+            return cloneTenant(created);
+        });
 
         this.audit.record({
             event_type: 'tenant_created',
@@ -94,22 +97,26 @@ export class RegistryService {
             },
         });
 
-        return cloneTenant(tenant);
+        return tenant;
     }
 
     setTenantState(
         tenantId: string,
-        state: TenantRecord['state'],
+        stateValue: TenantRecord['state'],
         actor?: string,
     ): TenantRecord {
-        const tenant = this.getTenantOrThrow(tenantId);
+        const tenant = this.stateStore.mutate((state) => {
+            const tenantRecord = this.getTenantOrThrow(state, tenantId);
 
-        if (!TENANT_STATES.includes(state)) {
-            throw new Error(`invalid tenant state: ${state}`);
-        }
+            if (!TENANT_STATES.includes(stateValue)) {
+                throw new Error(`invalid tenant state: ${stateValue}`);
+            }
 
-        tenant.state = state;
-        tenant.updated_at = this.clock.now().toISOString();
+            tenantRecord.state = stateValue;
+            tenantRecord.updated_at = this.clock.now().toISOString();
+
+            return cloneTenant(tenantRecord);
+        });
 
         this.audit.record({
             event_type: 'tenant_state_changed',
@@ -120,7 +127,7 @@ export class RegistryService {
             },
         });
 
-        return cloneTenant(tenant);
+        return tenant;
     }
 
     setTenantEntitlement(
@@ -128,16 +135,20 @@ export class RegistryService {
         entitlementState: TenantRecord['entitlement_state'],
         actor?: string,
     ): TenantRecord {
-        const tenant = this.getTenantOrThrow(tenantId);
+        const tenant = this.stateStore.mutate((state) => {
+            const tenantRecord = this.getTenantOrThrow(state, tenantId);
 
-        if (!ENTITLEMENT_STATES.includes(entitlementState)) {
-            throw new Error(
-                `invalid entitlement state: ${entitlementState}`,
-            );
-        }
+            if (!ENTITLEMENT_STATES.includes(entitlementState)) {
+                throw new Error(
+                    `invalid entitlement state: ${entitlementState}`,
+                );
+            }
 
-        tenant.entitlement_state = entitlementState;
-        tenant.updated_at = this.clock.now().toISOString();
+            tenantRecord.entitlement_state = entitlementState;
+            tenantRecord.updated_at = this.clock.now().toISOString();
+
+            return cloneTenant(tenantRecord);
+        });
 
         this.audit.record({
             event_type: 'tenant_entitlement_changed',
@@ -148,50 +159,56 @@ export class RegistryService {
             },
         });
 
-        return cloneTenant(tenant);
+        return tenant;
     }
 
     createInstance(input: CreateInstanceInput): InstanceRecord {
-        if (this.instances.has(input.instance_id)) {
-            throw new Error(`instance already exists: ${input.instance_id}`);
-        }
-
-        const tenant = this.getTenantOrThrow(input.tenant_id);
-        const normalizedServices = (input.allowed_services ??
-            [...SERVICE_SCOPES]).map((scope) => scope);
-
-        for (const service of normalizedServices) {
-            if (!SERVICE_SCOPES.includes(service)) {
-                throw new Error(`invalid service scope: ${service}`);
+        const instance = this.stateStore.mutate((state) => {
+            if (state.instances[input.instance_id]) {
+                throw new Error(`instance already exists: ${input.instance_id}`);
             }
-        }
 
-        for (const instance of this.instances.values()) {
-            if (instance.source === input.source) {
-                throw new Error(
-                    `source mapping already exists: ${input.source}`,
-                );
+            const tenant = this.getTenantOrThrow(state, input.tenant_id);
+            const normalizedServices = (input.allowed_services ??
+                [...SERVICE_SCOPES]).map((scope) => scope);
+
+            for (const service of normalizedServices) {
+                if (!SERVICE_SCOPES.includes(service)) {
+                    throw new Error(`invalid service scope: ${service}`);
+                }
             }
-        }
 
-        const state = input.state ?? 'active';
+            for (const existing of Object.values(state.instances)) {
+                if (existing.source === input.source) {
+                    throw new Error(
+                        `source mapping already exists: ${input.source}`,
+                    );
+                }
+            }
 
-        if (!INSTANCE_STATES.includes(state)) {
-            throw new Error(`invalid instance state: ${state}`);
-        }
+            const stateValue = input.state ?? 'active';
 
-        const nowIso = this.clock.now().toISOString();
-        const instance: InstanceRecord = {
-            instance_id: input.instance_id,
-            tenant_id: tenant.tenant_id,
-            source: input.source,
-            state,
-            allowed_services: Array.from(new Set(normalizedServices)).sort(),
-            created_at: nowIso,
-            updated_at: nowIso,
-        };
+            if (!INSTANCE_STATES.includes(stateValue)) {
+                throw new Error(`invalid instance state: ${stateValue}`);
+            }
 
-        this.instances.set(instance.instance_id, instance);
+            const nowIso = this.clock.now().toISOString();
+            const created: InstanceRecord = {
+                instance_id: input.instance_id,
+                tenant_id: tenant.tenant_id,
+                source: input.source,
+                state: stateValue,
+                allowed_services: Array.from(
+                    new Set(normalizedServices),
+                ).sort(),
+                created_at: nowIso,
+                updated_at: nowIso,
+            };
+
+            state.instances[created.instance_id] = created;
+
+            return cloneInstance(created);
+        });
 
         this.audit.record({
             event_type: 'instance_created',
@@ -205,22 +222,26 @@ export class RegistryService {
             },
         });
 
-        return cloneInstance(instance);
+        return instance;
     }
 
     setInstanceState(
         instanceId: string,
-        state: InstanceRecord['state'],
+        stateValue: InstanceRecord['state'],
         actor?: string,
     ): InstanceRecord {
-        const instance = this.getInstanceOrThrow(instanceId);
+        const instance = this.stateStore.mutate((state) => {
+            const record = this.getInstanceOrThrow(state, instanceId);
 
-        if (!INSTANCE_STATES.includes(state)) {
-            throw new Error(`invalid instance state: ${state}`);
-        }
+            if (!INSTANCE_STATES.includes(stateValue)) {
+                throw new Error(`invalid instance state: ${stateValue}`);
+            }
 
-        instance.state = state;
-        instance.updated_at = this.clock.now().toISOString();
+            record.state = stateValue;
+            record.updated_at = this.clock.now().toISOString();
+
+            return cloneInstance(record);
+        });
 
         this.audit.record({
             event_type: 'instance_state_changed',
@@ -232,7 +253,7 @@ export class RegistryService {
             },
         });
 
-        return cloneInstance(instance);
+        return instance;
     }
 
     setInstanceAllowedServices(
@@ -240,16 +261,22 @@ export class RegistryService {
         allowedServices: InstanceRecord['allowed_services'],
         actor?: string,
     ): InstanceRecord {
-        const instance = this.getInstanceOrThrow(instanceId);
+        const instance = this.stateStore.mutate((state) => {
+            const record = this.getInstanceOrThrow(state, instanceId);
 
-        for (const service of allowedServices) {
-            if (!SERVICE_SCOPES.includes(service)) {
-                throw new Error(`invalid service scope: ${service}`);
+            for (const service of allowedServices) {
+                if (!SERVICE_SCOPES.includes(service)) {
+                    throw new Error(`invalid service scope: ${service}`);
+                }
             }
-        }
 
-        instance.allowed_services = Array.from(new Set(allowedServices)).sort();
-        instance.updated_at = this.clock.now().toISOString();
+            record.allowed_services = Array.from(
+                new Set(allowedServices),
+            ).sort();
+            record.updated_at = this.clock.now().toISOString();
+
+            return cloneInstance(record);
+        });
 
         this.audit.record({
             event_type: 'instance_services_updated',
@@ -261,92 +288,100 @@ export class RegistryService {
             },
         });
 
-        return cloneInstance(instance);
+        return instance;
     }
 
     setInitialCredentials(input: InitialCredentialsInput): InstanceRecord {
-        const instance = this.getInstanceOrThrow(input.instance_id);
+        return this.stateStore.mutate((state) => {
+            const instance = this.getInstanceOrThrow(state, input.instance_id);
 
-        if (this.clientIdToInstance.has(input.client_id)) {
-            throw new Error(`client_id already assigned: ${input.client_id}`);
-        }
+            if (state.client_id_to_instance[input.client_id]) {
+                throw new Error(`client_id already assigned: ${input.client_id}`);
+            }
 
-        const nowIso = this.clock.now().toISOString();
-        const secretVersion: SecretVersionRecord = {
-            version_id: input.version_id,
-            secret_hash: input.secret_hash,
-            created_at: nowIso,
-        };
+            if (
+                instance.client_credentials &&
+                instance.client_credentials.client_id !== input.client_id
+            ) {
+                throw new Error(
+                    'instance already has credentials with different client_id',
+                );
+            }
 
-        if (
-            instance.client_credentials &&
-            instance.client_credentials.client_id !== input.client_id
-        ) {
-            throw new Error(
-                `instance already has credentials with different client_id`,
-            );
-        }
+            const nowIso = this.clock.now().toISOString();
+            const secretVersion: SecretVersionRecord = {
+                version_id: input.version_id,
+                secret_hash: input.secret_hash,
+                created_at: nowIso,
+            };
 
-        instance.client_credentials = {
-            client_id: input.client_id,
-            current_secret_version_id: input.version_id,
-            secret_versions: [secretVersion],
-        };
+            instance.client_credentials = {
+                client_id: input.client_id,
+                current_secret_version_id: input.version_id,
+                secret_versions: [secretVersion],
+            };
 
-        this.clientIdToInstance.set(input.client_id, instance.instance_id);
-        instance.updated_at = nowIso;
+            state.client_id_to_instance[input.client_id] = instance.instance_id;
+            instance.updated_at = nowIso;
 
-        return cloneInstance(instance);
+            return cloneInstance(instance);
+        });
     }
 
     addNextSecretVersion(input: AddSecretVersionInput): InstanceRecord {
-        const instance = this.getInstanceOrThrow(input.instance_id);
-        const credentials = this.getCredentialsOrThrow(instance);
+        return this.stateStore.mutate((state) => {
+            const instance = this.getInstanceOrThrow(state, input.instance_id);
+            const credentials = this.getCredentialsOrThrow(instance);
 
-        if (credentials.next_secret_version_id) {
-            throw new Error('rotation already in progress');
-        }
+            if (credentials.next_secret_version_id) {
+                throw new Error('rotation already in progress');
+            }
 
-        const existing = credentials.secret_versions.find(
-            (secret) => secret.version_id === input.version_id,
-        );
+            const existing = credentials.secret_versions.find(
+                (secret) => secret.version_id === input.version_id,
+            );
 
-        if (existing) {
-            throw new Error(`secret version already exists: ${input.version_id}`);
-        }
+            if (existing) {
+                throw new Error(
+                    `secret version already exists: ${input.version_id}`,
+                );
+            }
 
-        const nowIso = this.clock.now().toISOString();
-        const secretVersion: SecretVersionRecord = {
-            version_id: input.version_id,
-            secret_hash: input.secret_hash,
-            created_at: nowIso,
-            valid_until: input.valid_until,
-        };
+            const nowIso = this.clock.now().toISOString();
+            const secretVersion: SecretVersionRecord = {
+                version_id: input.version_id,
+                secret_hash: input.secret_hash,
+                created_at: nowIso,
+                valid_until: input.valid_until,
+            };
 
-        credentials.secret_versions.push(secretVersion);
-        credentials.next_secret_version_id = input.version_id;
-        instance.updated_at = nowIso;
+            credentials.secret_versions.push(secretVersion);
+            credentials.next_secret_version_id = input.version_id;
+            instance.updated_at = nowIso;
 
-        return cloneInstance(instance);
+            return cloneInstance(instance);
+        });
     }
 
     markSecretAdopted(instanceId: string, versionId: string): InstanceRecord {
-        const instance = this.getInstanceOrThrow(instanceId);
-        const credentials = this.getCredentialsOrThrow(instance);
-        const secret = credentials.secret_versions.find(
-            (entry) => entry.version_id === versionId,
-        );
+        return this.stateStore.mutate((state) => {
+            const instance = this.getInstanceOrThrow(state, instanceId);
+            const credentials = this.getCredentialsOrThrow(instance);
+            const secret = credentials.secret_versions.find(
+                (entry) => entry.version_id === versionId,
+            );
 
-        if (!secret) {
-            throw new Error(`secret version not found: ${versionId}`);
-        }
+            if (!secret) {
+                throw new Error(`secret version not found: ${versionId}`);
+            }
 
-        if (!secret.adopted_at) {
-            secret.adopted_at = this.clock.now().toISOString();
-            instance.updated_at = secret.adopted_at;
-        }
+            if (!secret.adopted_at) {
+                secret.adopted_at = this.clock.now().toISOString();
+                instance.updated_at = secret.adopted_at;
+            }
 
-        return cloneInstance(instance);
+            return cloneInstance(instance);
+        });
     }
 
     promoteNextSecret(instanceId: string): {
@@ -354,87 +389,93 @@ export class RegistryService {
         old_secret_version_id: string;
         new_secret_version_id: string;
     } {
-        const instance = this.getInstanceOrThrow(instanceId);
-        const credentials = this.getCredentialsOrThrow(instance);
-        const nextId = credentials.next_secret_version_id;
+        return this.stateStore.mutate((state) => {
+            const instance = this.getInstanceOrThrow(state, instanceId);
+            const credentials = this.getCredentialsOrThrow(instance);
+            const nextId = credentials.next_secret_version_id;
 
-        if (!nextId) {
-            throw new Error('no next secret version to promote');
-        }
+            if (!nextId) {
+                throw new Error('no next secret version to promote');
+            }
 
-        const nextSecret = credentials.secret_versions.find(
-            (secret) => secret.version_id === nextId,
-        );
+            const nextSecret = credentials.secret_versions.find(
+                (secret) => secret.version_id === nextId,
+            );
 
-        if (!nextSecret) {
-            throw new Error(`next secret version not found: ${nextId}`);
-        }
+            if (!nextSecret) {
+                throw new Error(`next secret version not found: ${nextId}`);
+            }
 
-        const nowIso = this.clock.now().toISOString();
-        const oldVersionId = credentials.current_secret_version_id;
-        const oldSecret = credentials.secret_versions.find(
-            (secret) => secret.version_id === oldVersionId,
-        );
+            const nowIso = this.clock.now().toISOString();
+            const oldVersionId = credentials.current_secret_version_id;
+            const oldSecret = credentials.secret_versions.find(
+                (secret) => secret.version_id === oldVersionId,
+            );
 
-        if (!oldSecret) {
-            throw new Error(`current secret version not found: ${oldVersionId}`);
-        }
+            if (!oldSecret) {
+                throw new Error(
+                    `current secret version not found: ${oldVersionId}`,
+                );
+            }
 
-        oldSecret.revoked_at = nowIso;
-        nextSecret.valid_until = undefined;
-        credentials.current_secret_version_id = nextId;
-        credentials.next_secret_version_id = undefined;
-        instance.updated_at = nowIso;
+            oldSecret.revoked_at = nowIso;
+            nextSecret.valid_until = undefined;
+            credentials.current_secret_version_id = nextId;
+            credentials.next_secret_version_id = undefined;
+            instance.updated_at = nowIso;
 
-        return {
-            instance: cloneInstance(instance),
-            old_secret_version_id: oldVersionId,
-            new_secret_version_id: nextId,
-        };
+            return {
+                instance: cloneInstance(instance),
+                old_secret_version_id: oldVersionId,
+                new_secret_version_id: nextId,
+            };
+        });
     }
 
     revokeSecretVersion(instanceId: string, versionId: string): InstanceRecord {
-        const instance = this.getInstanceOrThrow(instanceId);
-        const credentials = this.getCredentialsOrThrow(instance);
-        const secret = credentials.secret_versions.find(
-            (entry) => entry.version_id === versionId,
-        );
+        return this.stateStore.mutate((state) => {
+            const instance = this.getInstanceOrThrow(state, instanceId);
+            const credentials = this.getCredentialsOrThrow(instance);
+            const secret = credentials.secret_versions.find(
+                (entry) => entry.version_id === versionId,
+            );
 
-        if (!secret) {
-            throw new Error(`secret version not found: ${versionId}`);
-        }
+            if (!secret) {
+                throw new Error(`secret version not found: ${versionId}`);
+            }
 
-        secret.revoked_at = this.clock.now().toISOString();
+            secret.revoked_at = this.clock.now().toISOString();
 
-        if (credentials.next_secret_version_id === versionId) {
-            credentials.next_secret_version_id = undefined;
-        }
+            if (credentials.next_secret_version_id === versionId) {
+                credentials.next_secret_version_id = undefined;
+            }
 
-        instance.updated_at = this.clock.now().toISOString();
+            instance.updated_at = this.clock.now().toISOString();
 
-        return cloneInstance(instance);
+            return cloneInstance(instance);
+        });
     }
 
     getTenant(tenantId: string): TenantRecord | undefined {
-        const tenant = this.tenants.get(tenantId);
+        const tenant = this.stateStore.read().tenants[tenantId];
 
         return tenant ? cloneTenant(tenant) : undefined;
     }
 
     listTenants(): TenantRecord[] {
-        return Array.from(this.tenants.values())
+        return Object.values(this.stateStore.read().tenants)
             .map((tenant) => cloneTenant(tenant))
             .sort((left, right) => left.tenant_id.localeCompare(right.tenant_id));
     }
 
     getInstance(instanceId: string): InstanceRecord | undefined {
-        const instance = this.instances.get(instanceId);
+        const instance = this.stateStore.read().instances[instanceId];
 
         return instance ? cloneInstance(instance) : undefined;
     }
 
     listInstances(): InstanceRecord[] {
-        return Array.from(this.instances.values())
+        return Object.values(this.stateStore.read().instances)
             .map((instance) => cloneInstance(instance))
             .sort((left, right) =>
                 left.instance_id.localeCompare(right.instance_id),
@@ -442,19 +483,23 @@ export class RegistryService {
     }
 
     getInstanceByClientId(clientId: string): InstanceRecord | undefined {
-        const instanceId = this.clientIdToInstance.get(clientId);
+        const state = this.stateStore.read();
+        const instanceId = state.client_id_to_instance[clientId];
 
         if (!instanceId) {
             return undefined;
         }
 
-        const instance = this.instances.get(instanceId);
+        const instance = state.instances[instanceId];
 
         return instance ? cloneInstance(instance) : undefined;
     }
 
-    private getTenantOrThrow(tenantId: string): TenantRecord {
-        const tenant = this.tenants.get(tenantId);
+    private getTenantOrThrow(
+        state: ControlPlaneState,
+        tenantId: string,
+    ): TenantRecord {
+        const tenant = state.tenants[tenantId];
 
         if (!tenant) {
             throw new Error(`tenant not found: ${tenantId}`);
@@ -463,8 +508,11 @@ export class RegistryService {
         return tenant;
     }
 
-    private getInstanceOrThrow(instanceId: string): InstanceRecord {
-        const instance = this.instances.get(instanceId);
+    private getInstanceOrThrow(
+        state: ControlPlaneState,
+        instanceId: string,
+    ): InstanceRecord {
+        const instance = state.instances[instanceId];
 
         if (!instance) {
             throw new Error(`instance not found: ${instanceId}`);

@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { InMemoryControlPlaneStateStore } from '../persistence/in-memory-state-store';
+import { ControlPlaneStateStore } from '../persistence/state-store';
 import { Clock } from '../utils/clock';
 import {
     AuthAuditEvent,
@@ -53,9 +55,11 @@ function sanitizeMetadataValue(value: unknown): unknown {
 }
 
 export class AuditService {
-    private readonly events: AuthAuditEvent[] = [];
-
-    constructor(private readonly clock: Clock) {}
+    constructor(
+        private readonly clock: Clock,
+        private readonly stateStore: ControlPlaneStateStore =
+            new InMemoryControlPlaneStateStore(),
+    ) {}
 
     record(input: RecordAuditEventInput): AuthAuditEvent {
         const event: AuthAuditEvent = {
@@ -73,18 +77,20 @@ export class AuditService {
                 Record<string, unknown>),
         };
 
-        this.events.push(event);
+        return this.stateStore.mutate((state) => {
+            state.audit_events.push(event);
 
-        return {
-            ...event,
-            metadata: {
-                ...event.metadata,
-            },
-        };
+            return {
+                ...event,
+                metadata: {
+                    ...event.metadata,
+                },
+            };
+        });
     }
 
     list(limit?: number): AuthAuditEvent[] {
-        const ordered = this.events
+        const ordered = this.stateStore.read().audit_events
             .slice()
             .sort((left, right) =>
                 left.occurred_at.localeCompare(right.occurred_at),
