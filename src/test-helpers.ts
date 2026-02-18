@@ -15,7 +15,13 @@ export interface BootstrappedCredentials {
 
 export function createFixture(): TestFixture {
     const clock = new FixedClock('2026-02-16T12:00:00.000Z');
-    const controlPlane = createInMemoryControlPlane(clock);
+    const controlPlane = createInMemoryControlPlane(clock, {
+        issuer: 'rezilient-auth-control-plane-test',
+        signing_key: 'test-signing-key-0123456789abcdef',
+        token_ttl_seconds: 300,
+        token_clock_skew_seconds: 30,
+        outage_grace_window_seconds: 120,
+    });
 
     return {
         clock,

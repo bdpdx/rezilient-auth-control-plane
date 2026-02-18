@@ -22,14 +22,35 @@ export interface ControlPlaneServices {
 }
 
 export interface ControlPlaneServerOptions {
+    adminApiEnabled?: boolean;
     adminToken?: string;
+    maxJsonBodyBytes?: number;
 }
 
-async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+const DEFAULT_MAX_JSON_BODY_BYTES = 1_048_576;
+
+class RequestBodyTooLargeError extends Error {
+    constructor(public readonly maxBytes: number) {
+        super(`request body exceeded max of ${maxBytes} bytes`);
+    }
+}
+
+async function readJsonBody(
+    request: IncomingMessage,
+    maxJsonBodyBytes: number,
+): Promise<Record<string, unknown>> {
     const chunks: Buffer[] = [];
+    let totalBytes = 0;
 
     for await (const chunk of request) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        totalBytes += buffer.length;
+
+        if (totalBytes > maxJsonBodyBytes) {
+            throw new RequestBodyTooLargeError(maxJsonBodyBytes);
+        }
+
+        chunks.push(buffer);
     }
 
     if (chunks.length === 0) {
@@ -111,12 +132,20 @@ function isAdminRequest(pathname: string): boolean {
     return pathname.startsWith('/v1/admin/');
 }
 
+function isAdminApiEnabled(options?: ControlPlaneServerOptions): boolean {
+    if (options?.adminApiEnabled === undefined) {
+        return true;
+    }
+
+    return options.adminApiEnabled;
+}
+
 function isAdminAuthorized(
     request: IncomingMessage,
     options?: ControlPlaneServerOptions,
 ): boolean {
     if (!options?.adminToken) {
-        return true;
+        return false;
     }
 
     return request.headers['x-rezilient-admin-token'] === options.adminToken;
@@ -325,11 +354,25 @@ export function createControlPlaneServer(
     services: ControlPlaneServices,
     options?: ControlPlaneServerOptions,
 ): Server {
+    const maxJsonBodyBytes = options?.maxJsonBodyBytes ?? DEFAULT_MAX_JSON_BODY_BYTES;
+
+    if (!Number.isInteger(maxJsonBodyBytes) || maxJsonBodyBytes <= 0) {
+        throw new Error('maxJsonBodyBytes must be a positive integer');
+    }
+
     return createServer(async (request, response) => {
         try {
             const method = request.method || 'GET';
             const parsedUrl = new URL(request.url || '/', 'http://localhost');
             const pathname = parsedUrl.pathname;
+
+            if (isAdminRequest(pathname) && !isAdminApiEnabled(options)) {
+                sendJson(response, 404, {
+                    error: 'not_found',
+                });
+
+                return;
+            }
 
             if (isAdminRequest(pathname) && !isAdminAuthorized(request, options)) {
                 sendJson(response, 403, {
@@ -429,7 +472,7 @@ export function createControlPlaneServer(
                 return;
             }
 
-            const body = await readJsonBody(request);
+            const body = await readJsonBody(request, maxJsonBodyBytes);
 
             if (pathname === '/v1/admin/tenants') {
                 const tenant = services.registry.createTenant({
@@ -666,6 +709,16 @@ export function createControlPlaneServer(
                 error: 'not_found',
             });
         } catch (error) {
+            if (error instanceof RequestBodyTooLargeError) {
+                sendJson(response, 413, {
+                    error: 'payload_too_large',
+                    reason_code: 'request_body_too_large',
+                    max_bytes: error.maxBytes,
+                });
+
+                return;
+            }
+
             const message = error instanceof Error
                 ? error.message
                 : 'unknown_error';

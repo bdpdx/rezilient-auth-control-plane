@@ -55,6 +55,24 @@ async function getJson(
     };
 }
 
+async function postRaw(
+    baseUrl: string,
+    path: string,
+    body: string,
+    headers?: Record<string, string>,
+): Promise<ResponseData> {
+    const response = await fetch(`${baseUrl}${path}`, {
+        method: 'POST',
+        headers,
+        body,
+    });
+
+    return {
+        status: response.status,
+        body: await response.json() as Record<string, unknown>,
+    };
+}
+
 test('admin endpoints require token when configured', async () => {
     const fixture = createFixture();
     const server = createControlPlaneServer(fixture.control_plane.services, {
@@ -67,6 +85,14 @@ test('admin endpoints require token when configured', async () => {
         assert.equal(missingToken.status, 403);
         assert.equal(missingToken.body.reason_code, 'admin_auth_required');
 
+        const wrongToken = await getJson(
+            baseUrl,
+            '/v1/admin/overview',
+            'wrong-secret',
+        );
+        assert.equal(wrongToken.status, 403);
+        assert.equal(wrongToken.body.reason_code, 'admin_auth_required');
+
         const authorized = await getJson(
             baseUrl,
             '/v1/admin/overview',
@@ -77,6 +103,41 @@ test('admin endpoints require token when configured', async () => {
             authorized.body.outage_active,
             false,
         );
+    } finally {
+        await closeServer(server);
+    }
+});
+
+test('oversized JSON requests return 413 payload too large', async () => {
+    const fixture = createFixture();
+    const server = createControlPlaneServer(fixture.control_plane.services, {
+        adminToken: 'admin-secret',
+        maxJsonBodyBytes: 128,
+    });
+    const baseUrl = await listen(server);
+    const oversizedPayload = JSON.stringify({
+        client_id: 'cid',
+        client_secret: 'x'.repeat(256),
+        service_scope: 'reg',
+    });
+
+    try {
+        const response = await postRaw(
+            baseUrl,
+            '/v1/auth/token',
+            oversizedPayload,
+            {
+                'content-type': 'application/json',
+            },
+        );
+
+        assert.equal(response.status, 413);
+        assert.equal(response.body.error, 'payload_too_large');
+        assert.equal(
+            response.body.reason_code,
+            'request_body_too_large',
+        );
+        assert.equal(response.body.max_bytes, 128);
     } finally {
         await closeServer(server);
     }
