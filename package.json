@@ -9,9 +9,10 @@
         "build": "tsc -p tsconfig.json",
         "start": "node dist/index.js",
         "start:dev": "ts-node src/index.ts",
-        "test": "npm run build && node --test dist/token/token.service.test.js dist/enrollment/enrollment.integration.test.js dist/rotation/rotation.integration.test.js dist/failure-modes.test.js dist/server.admin.integration.test.js dist/startup.security.test.js dist/durability.integration.test.js"
+        "test": "npm run build && node --test dist/audit/audit.service.test.js dist/token/token.service.test.js dist/enrollment/enrollment.integration.test.js dist/rotation/rotation.integration.test.js dist/failure-modes.test.js dist/server.admin.integration.test.js dist/startup.security.test.js dist/durability.integration.test.js"
     },
     "dependencies": {
+        "@rezilient/types": "file:../rezilient-types",
         "zod": "^4.3.6"
     },
     "devDependencies": {

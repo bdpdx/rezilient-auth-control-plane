@@ -1,4 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import {
+    compareCrossServiceAuditEventsForReplay,
+    CrossServiceAuditEvent,
+    fromLegacyAuthAuditEvent,
+} from '@rezilient/types';
 import { InMemoryControlPlaneStateStore } from '../persistence/in-memory-state-store';
 import { ControlPlaneStateStore } from '../persistence/state-store';
 import { Clock } from '../utils/clock';
@@ -54,6 +59,14 @@ function sanitizeMetadataValue(value: unknown): unknown {
     return value;
 }
 
+function cloneCrossServiceAuditEvent(
+    event: CrossServiceAuditEvent,
+): CrossServiceAuditEvent {
+    return JSON.parse(
+        JSON.stringify(event),
+    ) as CrossServiceAuditEvent;
+}
+
 export class AuditService {
     constructor(
         private readonly clock: Clock,
@@ -76,9 +89,11 @@ export class AuditService {
             metadata: (sanitizeMetadataValue(input.metadata || {}) as
                 Record<string, unknown>),
         };
+        const crossServiceEvent = fromLegacyAuthAuditEvent(event);
 
         return this.stateStore.mutate((state) => {
             state.audit_events.push(event);
+            state.cross_service_audit_events.push(crossServiceEvent);
 
             return {
                 ...event,
@@ -111,5 +126,21 @@ export class AuditService {
                 ...event.metadata,
             },
         }));
+    }
+
+    listCrossService(limit?: number): CrossServiceAuditEvent[] {
+        const ordered = this.stateStore.read().cross_service_audit_events
+            .slice()
+            .sort((left, right) =>
+                compareCrossServiceAuditEventsForReplay(left, right)
+            );
+
+        if (limit === undefined) {
+            return ordered.map((event) => cloneCrossServiceAuditEvent(event));
+        }
+
+        return ordered
+            .slice(-limit)
+            .map((event) => cloneCrossServiceAuditEvent(event));
     }
 }

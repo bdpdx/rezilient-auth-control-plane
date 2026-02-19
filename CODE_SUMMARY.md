@@ -15,11 +15,13 @@ Primary entrypoints:
 - `src/enrollment/enrollment.service.ts`: one-time enrollment code issue/exchange.
 - `src/token/token.service.ts`: client credential mint + token validation.
 - `src/rotation/rotation.service.ts`: dual-secret overlap rotation lifecycle.
-- `src/audit/audit.service.ts`: append-only auth audit stream.
+- `src/audit/audit.service.ts`: append-only auth audit stream with normalized
+  cross-service audit emission (`audit.event.v1`).
 - `src/persistence/*`: shared state-store abstractions and SQLite/in-memory
   implementations for durable ACP state.
 
 Testing:
+- `src/audit/audit.service.test.ts`
 - `src/token/token.service.test.ts`
 - `src/enrollment/enrollment.integration.test.ts`
 - `src/rotation/rotation.integration.test.ts`

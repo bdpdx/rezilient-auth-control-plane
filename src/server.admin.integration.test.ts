@@ -349,6 +349,21 @@ test('admin lifecycle endpoints enforce strict validation', async () => {
             invalidLimit.body.message,
             'limit must be a positive integer',
         );
+        const invalidCrossServiceLimit = await getJson(
+            baseUrl,
+            '/v1/admin/audit-events/cross-service?limit=0',
+            'admin-secret',
+        );
+
+        assert.equal(invalidCrossServiceLimit.status, 400);
+        assert.equal(
+            invalidCrossServiceLimit.body.reason_code,
+            'invalid_admin_request',
+        );
+        assert.equal(
+            invalidCrossServiceLimit.body.message,
+            'limit must be a positive integer',
+        );
 
         const invalidTtl = await postJson(
             baseUrl,
@@ -402,6 +417,47 @@ test('admin lifecycle endpoints enforce strict validation', async () => {
             invalidOutageToggle.body.message,
             'outage_active must be a boolean',
         );
+    } finally {
+        await closeServer(server);
+    }
+});
+
+test('admin cross-service audit endpoint returns normalized events', async () => {
+    const fixture = createFixture();
+    const credentials = bootstrapRegistryAndCredentials(fixture);
+
+    const minted = fixture.control_plane.services.token.mintToken({
+        client_id: credentials.client_id,
+        client_secret: credentials.client_secret,
+        service_scope: 'reg',
+    });
+
+    assert.equal(minted.success, true);
+
+    const server = createControlPlaneServer(fixture.control_plane.services, {
+        adminToken: 'admin-secret',
+    });
+    const baseUrl = await listen(server);
+
+    try {
+        const response = await getJson(
+            baseUrl,
+            '/v1/admin/audit-events/cross-service',
+            'admin-secret',
+        );
+
+        assert.equal(response.status, 200);
+        const events = response.body.events as Array<Record<string, unknown>>;
+
+        assert.equal(events.length > 0, true);
+        assert.equal(events[0].contract_version, 'audit.contracts.v1');
+        assert.equal(events[0].schema_version, 'audit.event.v1');
+        const hasTokenMintSucceeded = events.some((event) =>
+            event.action === 'token_minted' &&
+            event.outcome === 'accepted'
+        );
+
+        assert.equal(hasTokenMintSucceeded, true);
     } finally {
         await closeServer(server);
     }

@@ -1,4 +1,5 @@
 import { AuthAuditEvent } from '../audit/types';
+import { CrossServiceAuditEvent } from '@rezilient/types';
 import {
     InstanceRecord,
     TenantRecord,
@@ -22,6 +23,7 @@ export interface ControlPlaneState {
     enrollment_records: Record<string, EnrollmentCodeRecord>;
     code_hash_to_id: Record<string, string>;
     audit_events: AuthAuditEvent[];
+    cross_service_audit_events: CrossServiceAuditEvent[];
     outage_active: boolean;
 }
 
@@ -33,6 +35,7 @@ export function createEmptyControlPlaneState(): ControlPlaneState {
         enrollment_records: {},
         code_hash_to_id: {},
         audit_events: [],
+        cross_service_audit_events: [],
         outage_active: false,
     };
 }

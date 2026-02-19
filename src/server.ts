@@ -568,6 +568,22 @@ export function createControlPlaneServer(
                 return;
             }
 
+            if (
+                method === 'GET' &&
+                pathname === '/v1/admin/audit-events/cross-service'
+            ) {
+                const limit = parseAuditEventLimit(
+                    parsedUrl.searchParams.get('limit'),
+                );
+                const events = services.audit.listCrossService(limit);
+
+                sendJson(response, 200, {
+                    events,
+                });
+
+                return;
+            }
+
             if (method === 'GET' && pathname === '/v1/admin/tenants') {
                 sendJson(response, 200, {
                     tenants: services.registry.listTenants(),

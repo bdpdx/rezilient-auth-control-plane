@@ -57,7 +57,60 @@ function parseState(stateJson: string): ControlPlaneState {
         throw new Error('invalid persisted state payload');
     }
 
-    return cloneControlPlaneState(parsed as ControlPlaneState);
+    const state = parsed as Partial<ControlPlaneState>;
+    let tenants: ControlPlaneState['tenants'] = {};
+    let instances: ControlPlaneState['instances'] = {};
+    let clientIdToInstance: ControlPlaneState['client_id_to_instance'] = {};
+    let enrollmentRecords: ControlPlaneState['enrollment_records'] = {};
+    let codeHashToId: ControlPlaneState['code_hash_to_id'] = {};
+
+    if (state.tenants && typeof state.tenants === 'object') {
+        tenants = state.tenants as ControlPlaneState['tenants'];
+    }
+
+    if (state.instances && typeof state.instances === 'object') {
+        instances = state.instances as ControlPlaneState['instances'];
+    }
+
+    if (
+        state.client_id_to_instance &&
+        typeof state.client_id_to_instance === 'object'
+    ) {
+        clientIdToInstance = state.client_id_to_instance as
+            ControlPlaneState['client_id_to_instance'];
+    }
+
+    if (
+        state.enrollment_records &&
+        typeof state.enrollment_records === 'object'
+    ) {
+        enrollmentRecords = state.enrollment_records as
+            ControlPlaneState['enrollment_records'];
+    }
+
+    if (state.code_hash_to_id && typeof state.code_hash_to_id === 'object') {
+        codeHashToId = state.code_hash_to_id as
+            ControlPlaneState['code_hash_to_id'];
+    }
+
+    return cloneControlPlaneState({
+        tenants,
+        instances,
+        client_id_to_instance: clientIdToInstance,
+        enrollment_records: enrollmentRecords,
+        code_hash_to_id: codeHashToId,
+        audit_events: Array.isArray(state.audit_events)
+            ? state.audit_events
+            : [],
+        cross_service_audit_events: Array.isArray(
+            state.cross_service_audit_events,
+        )
+            ? state.cross_service_audit_events
+            : [],
+        outage_active: typeof state.outage_active === 'boolean'
+            ? state.outage_active
+            : false,
+    });
 }
 
 export class SqliteControlPlaneStateStore implements ControlPlaneStateStore {

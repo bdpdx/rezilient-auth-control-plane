@@ -4,12 +4,16 @@
   to durable SQLite-backed state.
 - `server.ts`: HTTP routing for admin, enrollment, token, and health endpoints.
 - `server.ts`: HTTP routing for admin, enrollment, token, and health endpoints,
-  plus RS-14 admin overview and instance/tenant read APIs.
+  plus RS-14 admin overview, instance/tenant read APIs, and
+  `/v1/admin/audit-events/cross-service`.
 - `constants.ts`: enums and reason codes for registry/token decisions.
 - `utils/clock.ts`: clock abstraction used by deterministic tests.
 - `utils/crypto.ts`: token signing/verification and secret hashing helpers.
-- `audit/audit.service.ts`: append-only audit event recorder.
+- `audit/audit.service.ts`: append-only auth audit recorder plus normalized
+  cross-service event emission/listing.
 - `audit/types.ts`: audit event types and payload shape.
+- `audit/audit.service.test.ts`: normalized cross-service audit emission and
+  replay-order list coverage.
 - `persistence/state-store.ts`: shared persistence interface for ACP state.
 - `persistence/sqlite-state-store.ts`: SQLite-backed durable state store.
 - `persistence/in-memory-state-store.ts`: in-memory store used by tests.
