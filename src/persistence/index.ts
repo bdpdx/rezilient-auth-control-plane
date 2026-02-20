@@ -1,6 +1,6 @@
 export { InMemoryControlPlaneStateStore } from './in-memory-state-store';
+export { PostgresControlPlaneStateStore } from './postgres-state-store';
 export { ControlPlaneStateStore } from './state-store';
-export { SqliteControlPlaneStateStore } from './sqlite-state-store';
 export {
     cloneControlPlaneState,
     ControlPlaneState,

@@ -5,11 +5,11 @@ import {
     createFixture,
 } from '../test-helpers';
 
-test('Dual-secret overlap supports adoption then cutover', () => {
+test('Dual-secret overlap supports adoption then cutover', async () => {
     const fixture = createFixture();
-    const credentials = bootstrapRegistryAndCredentials(fixture);
+    const credentials = await bootstrapRegistryAndCredentials(fixture);
 
-    const started = fixture.control_plane.services.rotation.startRotation({
+    const started = await fixture.control_plane.services.rotation.startRotation({
         instance_id: credentials.instance_id,
         overlap_seconds: 3600,
     });
@@ -17,7 +17,7 @@ test('Dual-secret overlap supports adoption then cutover', () => {
     assert.ok(started.next_secret_version_id.startsWith('sv_'));
     assert.ok(started.next_client_secret.startsWith('sec_'));
 
-    const oldMint = fixture.control_plane.services.token.mintToken({
+    const oldMint = await fixture.control_plane.services.token.mintToken({
         client_id: credentials.client_id,
         client_secret: credentials.client_secret,
         service_scope: 'reg',
@@ -25,7 +25,7 @@ test('Dual-secret overlap supports adoption then cutover', () => {
 
     assert.equal(oldMint.success, true);
 
-    const newMint = fixture.control_plane.services.token.mintToken({
+    const newMint = await fixture.control_plane.services.token.mintToken({
         client_id: credentials.client_id,
         client_secret: started.next_client_secret,
         service_scope: 'reg',
@@ -33,13 +33,13 @@ test('Dual-secret overlap supports adoption then cutover', () => {
 
     assert.equal(newMint.success, true);
 
-    const completed = fixture.control_plane.services.rotation.completeRotation({
+    const completed = await fixture.control_plane.services.rotation.completeRotation({
         instance_id: credentials.instance_id,
     });
 
     assert.equal(completed.new_secret_version_id, started.next_secret_version_id);
 
-    const oldAfterCutover = fixture.control_plane.services.token.mintToken({
+    const oldAfterCutover = await fixture.control_plane.services.token.mintToken({
         client_id: credentials.client_id,
         client_secret: credentials.client_secret,
         service_scope: 'reg',
@@ -50,7 +50,7 @@ test('Dual-secret overlap supports adoption then cutover', () => {
         assert.equal(oldAfterCutover.reason_code, 'denied_invalid_secret');
     }
 
-    const newAfterCutover = fixture.control_plane.services.token.mintToken({
+    const newAfterCutover = await fixture.control_plane.services.token.mintToken({
         client_id: credentials.client_id,
         client_secret: started.next_client_secret,
         service_scope: 'rrs',
@@ -58,7 +58,7 @@ test('Dual-secret overlap supports adoption then cutover', () => {
 
     assert.equal(newAfterCutover.success, true);
 
-    const events = fixture.control_plane.services.audit.list();
+    const events = await fixture.control_plane.services.audit.list();
     const hasAdoptionEvent = events.some(
         (event) => event.event_type === 'secret_rotation_adopted',
     );
@@ -66,11 +66,11 @@ test('Dual-secret overlap supports adoption then cutover', () => {
     assert.equal(hasAdoptionEvent, true);
 });
 
-test('Revoked secret version can no longer mint tokens', () => {
+test('Revoked secret version can no longer mint tokens', async () => {
     const fixture = createFixture();
-    const credentials = bootstrapRegistryAndCredentials(fixture);
+    const credentials = await bootstrapRegistryAndCredentials(fixture);
 
-    const instance = fixture.control_plane.services.registry.getInstance(
+    const instance = await fixture.control_plane.services.registry.getInstance(
         credentials.instance_id,
     );
 
@@ -80,13 +80,13 @@ test('Revoked secret version can no longer mint tokens', () => {
         return;
     }
 
-    fixture.control_plane.services.rotation.revokeSecret({
+    await fixture.control_plane.services.rotation.revokeSecret({
         instance_id: credentials.instance_id,
         secret_version_id: instance.client_credentials.current_secret_version_id,
         reason: 'compromised',
     });
 
-    const mint = fixture.control_plane.services.token.mintToken({
+    const mint = await fixture.control_plane.services.token.mintToken({
         client_id: credentials.client_id,
         client_secret: credentials.client_secret,
         service_scope: 'reg',

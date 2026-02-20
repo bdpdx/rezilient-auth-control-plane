@@ -9,22 +9,22 @@ interface MintMatrixCase {
     case_name: string;
     mutate: (
         fixture: ReturnType<typeof createFixture>,
-        credentials: ReturnType<typeof bootstrapRegistryAndCredentials>,
-    ) => {
+        credentials: Awaited<ReturnType<typeof bootstrapRegistryAndCredentials>>,
+    ) => Promise<{
         client_id: string;
         client_secret: string;
         service_scope: string;
         grant_type?: string;
-    };
+    }>;
     expected_success: boolean;
     expected_reason?: string;
 }
 
-test('TokenService mint decision matrix covers allow + deny paths', () => {
+test('TokenService mint decision matrix covers allow + deny paths', async () => {
     const matrix: MintMatrixCase[] = [
         {
             case_name: 'allow reg scope',
-            mutate: (_fixture, credentials) => ({
+            mutate: async (_fixture, credentials) => ({
                 client_id: credentials.client_id,
                 client_secret: credentials.client_secret,
                 service_scope: 'reg',
@@ -34,7 +34,7 @@ test('TokenService mint decision matrix covers allow + deny paths', () => {
         },
         {
             case_name: 'allow rrs scope',
-            mutate: (_fixture, credentials) => ({
+            mutate: async (_fixture, credentials) => ({
                 client_id: credentials.client_id,
                 client_secret: credentials.client_secret,
                 service_scope: 'rrs',
@@ -44,7 +44,7 @@ test('TokenService mint decision matrix covers allow + deny paths', () => {
         },
         {
             case_name: 'deny wrong grant type',
-            mutate: (_fixture, credentials) => ({
+            mutate: async (_fixture, credentials) => ({
                 client_id: credentials.client_id,
                 client_secret: credentials.client_secret,
                 service_scope: 'reg',
@@ -55,7 +55,7 @@ test('TokenService mint decision matrix covers allow + deny paths', () => {
         },
         {
             case_name: 'deny bad secret',
-            mutate: (_fixture, credentials) => ({
+            mutate: async (_fixture, credentials) => ({
                 client_id: credentials.client_id,
                 client_secret: 'sec_invalid',
                 service_scope: 'reg',
@@ -65,8 +65,8 @@ test('TokenService mint decision matrix covers allow + deny paths', () => {
         },
         {
             case_name: 'deny service not allowed',
-            mutate: (ctx, credentials) => {
-                ctx.control_plane.services.registry.setInstanceAllowedServices(
+            mutate: async (ctx, credentials) => {
+                await ctx.control_plane.services.registry.setInstanceAllowedServices(
                     credentials.instance_id,
                     ['reg'],
                 );
@@ -82,8 +82,8 @@ test('TokenService mint decision matrix covers allow + deny paths', () => {
         },
         {
             case_name: 'deny suspended instance',
-            mutate: (ctx, credentials) => {
-                ctx.control_plane.services.registry.setInstanceState(
+            mutate: async (ctx, credentials) => {
+                await ctx.control_plane.services.registry.setInstanceState(
                     credentials.instance_id,
                     'suspended',
                 );
@@ -99,8 +99,8 @@ test('TokenService mint decision matrix covers allow + deny paths', () => {
         },
         {
             case_name: 'deny disabled tenant entitlement',
-            mutate: (ctx, credentials) => {
-                ctx.control_plane.services.registry.setTenantEntitlement(
+            mutate: async (ctx, credentials) => {
+                await ctx.control_plane.services.registry.setTenantEntitlement(
                     credentials.tenant_id,
                     'disabled',
                 );
@@ -116,8 +116,8 @@ test('TokenService mint decision matrix covers allow + deny paths', () => {
         },
         {
             case_name: 'deny during outage mode',
-            mutate: (ctx, credentials) => {
-                ctx.control_plane.services.token.setOutageMode(true);
+            mutate: async (ctx, credentials) => {
+                await ctx.control_plane.services.token.setOutageMode(true);
 
                 return {
                     client_id: credentials.client_id,
@@ -133,14 +133,16 @@ test('TokenService mint decision matrix covers allow + deny paths', () => {
     for (const matrixCase of matrix) {
         const caseSlug = matrixCase.case_name.replace(/\s+/g, '-');
         const caseFixture = createFixture();
-        const caseCredentials = bootstrapRegistryAndCredentials(caseFixture, {
+        const caseCredentials = await bootstrapRegistryAndCredentials(caseFixture, {
             tenant_id: `tenant-${caseSlug}`,
             instance_id: `instance-${caseSlug}`,
             source: `sn://${caseSlug}.service-now.com`,
         });
-        const request = matrixCase.mutate(caseFixture, caseCredentials);
+        const request = await matrixCase.mutate(caseFixture, caseCredentials);
 
-        const result = caseFixture.control_plane.services.token.mintToken(request);
+        const result = await caseFixture.control_plane.services.token.mintToken(
+            request,
+        );
 
         assert.equal(
             result.success,
@@ -154,10 +156,10 @@ test('TokenService mint decision matrix covers allow + deny paths', () => {
     }
 });
 
-test('TokenService validates service-scoped tokens', () => {
+test('TokenService validates service-scoped tokens', async () => {
     const fixture = createFixture();
-    const credentials = bootstrapRegistryAndCredentials(fixture);
-    const mint = fixture.control_plane.services.token.mintToken({
+    const credentials = await bootstrapRegistryAndCredentials(fixture);
+    const mint = await fixture.control_plane.services.token.mintToken({
         client_id: credentials.client_id,
         client_secret: credentials.client_secret,
         service_scope: 'rrs',
@@ -169,14 +171,14 @@ test('TokenService validates service-scoped tokens', () => {
         return;
     }
 
-    const valid = fixture.control_plane.services.token.validateToken({
+    const valid = await fixture.control_plane.services.token.validateToken({
         access_token: mint.access_token,
         expected_service_scope: 'rrs',
     });
 
     assert.equal(valid.success, true);
 
-    const invalidScope = fixture.control_plane.services.token.validateToken({
+    const invalidScope = await fixture.control_plane.services.token.validateToken({
         access_token: mint.access_token,
         expected_service_scope: 'reg',
     });
@@ -192,10 +194,10 @@ test('TokenService validates service-scoped tokens', () => {
     );
 });
 
-test('TokenService emits refresh audit event when flow=refresh', () => {
+test('TokenService emits refresh audit event when flow=refresh', async () => {
     const fixture = createFixture();
-    const credentials = bootstrapRegistryAndCredentials(fixture);
-    const result = fixture.control_plane.services.token.mintToken({
+    const credentials = await bootstrapRegistryAndCredentials(fixture);
+    const result = await fixture.control_plane.services.token.mintToken({
         flow: 'refresh',
         client_id: credentials.client_id,
         client_secret: credentials.client_secret,
@@ -204,7 +206,7 @@ test('TokenService emits refresh audit event when flow=refresh', () => {
 
     assert.equal(result.success, true);
 
-    const events = fixture.control_plane.services.audit.list();
+    const events = await fixture.control_plane.services.audit.list();
     const hasRefreshEvent = events.some(
         (event) => event.event_type === 'token_refreshed',
     );

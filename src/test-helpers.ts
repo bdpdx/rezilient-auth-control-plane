@@ -29,7 +29,7 @@ export function createFixture(): TestFixture {
     };
 }
 
-export function bootstrapRegistryAndCredentials(
+export async function bootstrapRegistryAndCredentials(
     fixture: TestFixture,
     options?: {
         tenant_id?: string;
@@ -38,31 +38,31 @@ export function bootstrapRegistryAndCredentials(
         source?: string;
         allowed_services?: Array<'reg' | 'rrs'>;
     },
-): BootstrappedCredentials {
+): Promise<BootstrappedCredentials> {
     const tenantId = options?.tenant_id ?? 'tenant-acme';
     const tenantName = options?.tenant_name ?? 'Acme';
     const instanceId = options?.instance_id ?? 'instance-dev-01';
     const source = options?.source ?? 'sn://acme-dev.service-now.com';
     const allowedServices = options?.allowed_services ?? ['reg', 'rrs'];
 
-    fixture.control_plane.services.registry.createTenant({
+    await fixture.control_plane.services.registry.createTenant({
         tenant_id: tenantId,
         name: tenantName,
     });
 
-    fixture.control_plane.services.registry.createInstance({
+    await fixture.control_plane.services.registry.createInstance({
         instance_id: instanceId,
         tenant_id: tenantId,
         source,
         allowed_services: allowedServices,
     });
 
-    const enrollment = fixture.control_plane.services.enrollment.issueEnrollmentCode({
+    const enrollment = await fixture.control_plane.services.enrollment.issueEnrollmentCode({
         tenant_id: tenantId,
         instance_id: instanceId,
         ttl_seconds: 900,
     });
-    const exchange = fixture.control_plane.services.enrollment.exchangeEnrollmentCode(
+    const exchange = await fixture.control_plane.services.enrollment.exchangeEnrollmentCode(
         enrollment.enrollment_code,
     );
 

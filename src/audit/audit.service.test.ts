@@ -4,14 +4,14 @@ import { InMemoryControlPlaneStateStore } from '../persistence/in-memory-state-s
 import { FixedClock } from '../utils/clock';
 import { AuditService } from './audit.service';
 
-test('AuditService emits normalized cross-service audit events', () => {
+test('AuditService emits normalized cross-service audit events', async () => {
     const clock = new FixedClock('2026-02-18T10:00:00.000Z');
     const service = new AuditService(
         clock,
         new InMemoryControlPlaneStateStore(),
     );
 
-    const legacyEvent = service.record({
+    const legacyEvent = await service.record({
         event_type: 'token_minted',
         actor: 'svc:acp-token-service',
         tenant_id: 'tenant-acme',
@@ -31,7 +31,7 @@ test('AuditService emits normalized cross-service audit events', () => {
     const nested = legacyEvent.metadata.nested as Record<string, unknown>;
     assert.equal(nested.client_secret, '[REDACTED]');
 
-    const crossServiceEvents = service.listCrossService();
+    const crossServiceEvents = await service.listCrossService();
 
     assert.equal(crossServiceEvents.length, 1);
     assert.equal(
@@ -51,14 +51,14 @@ test('AuditService emits normalized cross-service audit events', () => {
     assert.equal(crossServiceEvents[0].metadata.service_scope, 'reg');
 });
 
-test('AuditService cross-service list is replay ordered and limit aware', () => {
+test('AuditService cross-service list is replay ordered and limit aware', async () => {
     const clock = new FixedClock('2026-02-18T10:00:00.000Z');
     const service = new AuditService(
         clock,
         new InMemoryControlPlaneStateStore(),
     );
 
-    service.record({
+    await service.record({
         event_type: 'token_minted',
         tenant_id: 'tenant-acme',
         instance_id: 'instance-dev-01',
@@ -66,7 +66,7 @@ test('AuditService cross-service list is replay ordered and limit aware', () => 
     });
 
     clock.set('2026-02-18T10:00:05.000Z');
-    service.record({
+    await service.record({
         event_type: 'token_validate_denied',
         tenant_id: 'tenant-acme',
         instance_id: 'instance-dev-01',
@@ -74,7 +74,7 @@ test('AuditService cross-service list is replay ordered and limit aware', () => 
         metadata: {},
     });
 
-    const ordered = service.listCrossService();
+    const ordered = await service.listCrossService();
 
     assert.equal(ordered.length, 2);
     assert.equal(ordered[0].action, 'token_minted');
@@ -85,7 +85,7 @@ test('AuditService cross-service list is replay ordered and limit aware', () => 
         'denied_token_wrong_service_scope',
     );
 
-    const limited = service.listCrossService(1);
+    const limited = await service.listCrossService(1);
 
     assert.equal(limited.length, 1);
     assert.equal(limited[0].action, 'token_validate_denied');

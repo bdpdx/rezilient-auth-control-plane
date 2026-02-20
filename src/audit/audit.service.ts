@@ -74,7 +74,7 @@ export class AuditService {
             new InMemoryControlPlaneStateStore(),
     ) {}
 
-    record(input: RecordAuditEventInput): AuthAuditEvent {
+    async record(input: RecordAuditEventInput): Promise<AuthAuditEvent> {
         const event: AuthAuditEvent = {
             event_id: randomUUID(),
             event_type: input.event_type,
@@ -91,7 +91,7 @@ export class AuditService {
         };
         const crossServiceEvent = fromLegacyAuthAuditEvent(event);
 
-        return this.stateStore.mutate((state) => {
+        return await this.stateStore.mutate((state) => {
             state.audit_events.push(event);
             state.cross_service_audit_events.push(crossServiceEvent);
 
@@ -104,8 +104,8 @@ export class AuditService {
         });
     }
 
-    list(limit?: number): AuthAuditEvent[] {
-        const ordered = this.stateStore.read().audit_events
+    async list(limit?: number): Promise<AuthAuditEvent[]> {
+        const ordered = (await this.stateStore.read()).audit_events
             .slice()
             .sort((left, right) =>
                 left.occurred_at.localeCompare(right.occurred_at),
@@ -128,8 +128,8 @@ export class AuditService {
         }));
     }
 
-    listCrossService(limit?: number): CrossServiceAuditEvent[] {
-        const ordered = this.stateStore.read().cross_service_audit_events
+    async listCrossService(limit?: number): Promise<CrossServiceAuditEvent[]> {
+        const ordered = (await this.stateStore.read()).cross_service_audit_events
             .slice()
             .sort((left, right) =>
                 compareCrossServiceAuditEventsForReplay(left, right)

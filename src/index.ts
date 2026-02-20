@@ -2,8 +2,8 @@ import { createControlPlaneServer, ControlPlaneServices } from './server';
 import { AuditService } from './audit/audit.service';
 import { EnrollmentService } from './enrollment/enrollment.service';
 import { InMemoryControlPlaneStateStore } from './persistence/in-memory-state-store';
+import { PostgresControlPlaneStateStore } from './persistence/postgres-state-store';
 import { ControlPlaneStateStore } from './persistence/state-store';
-import { SqliteControlPlaneStateStore } from './persistence/sqlite-state-store';
 import { RegistryService } from './registry/registry.service';
 import { RotationService } from './rotation/rotation.service';
 import {
@@ -21,6 +21,7 @@ const DEFAULT_TOKEN_TTL_SECONDS = 300;
 const DEFAULT_TOKEN_CLOCK_SKEW_SECONDS = 30;
 const DEFAULT_OUTAGE_GRACE_WINDOW_SECONDS = 120;
 const DEFAULT_MAX_JSON_BODY_BYTES = 1_048_576;
+const DEFAULT_PERSISTENCE_SNAPSHOT_KEY = 'default';
 const MIN_SIGNING_KEY_LENGTH = 32;
 
 function parseIntConfig(
@@ -109,7 +110,8 @@ export interface ControlPlaneRuntimeConfig {
     admin_api_enabled: boolean;
     admin_token?: string;
     max_json_body_bytes: number;
-    persistence_db_path: string;
+    persistence_pg_url: string;
+    persistence_snapshot_key: string;
 }
 
 export function buildTokenServiceConfigFromEnv(
@@ -169,10 +171,13 @@ export function loadControlPlaneRuntimeConfig(
             DEFAULT_MAX_JSON_BODY_BYTES,
             'AUTH_MAX_JSON_BODY_BYTES',
         ),
-        persistence_db_path: parseRequiredStringConfig(
-            env.AUTH_PERSISTENCE_DB_PATH,
-            'AUTH_PERSISTENCE_DB_PATH',
+        persistence_pg_url: parseRequiredStringConfig(
+            env.AUTH_PERSISTENCE_PG_URL,
+            'AUTH_PERSISTENCE_PG_URL',
         ),
+        persistence_snapshot_key: parseOptionalToken(
+            env.AUTH_PERSISTENCE_SNAPSHOT_KEY,
+        ) ?? DEFAULT_PERSISTENCE_SNAPSHOT_KEY,
     };
 }
 
@@ -180,6 +185,7 @@ export interface ControlPlane {
     services: ControlPlaneServices;
     token_config: TokenServiceConfig;
     state_store: ControlPlaneStateStore;
+    close: () => Promise<void>;
 }
 
 function buildControlPlane(
@@ -217,6 +223,9 @@ function buildControlPlane(
         },
         token_config: resolvedTokenConfig,
         state_store: stateStore,
+        close: async (): Promise<void> => {
+            await stateStore.close?.();
+        },
     };
 }
 
@@ -229,37 +238,57 @@ export function createInMemoryControlPlane(
     return buildControlPlane(stateStore, clock, tokenConfig);
 }
 
-export function createDurableControlPlane(
-    persistenceDbPath: string,
+export async function createDurableControlPlane(
+    persistencePgUrl: string,
     clock?: Clock,
     tokenConfig?: TokenServiceConfig,
-): ControlPlane {
-    const stateStore = new SqliteControlPlaneStateStore(persistenceDbPath);
+    options?: {
+        snapshot_key?: string;
+    },
+): Promise<ControlPlane> {
+    const snapshotKey = options?.snapshot_key ??
+        DEFAULT_PERSISTENCE_SNAPSHOT_KEY;
+    const stateStore = await PostgresControlPlaneStateStore.connect(
+        persistencePgUrl,
+        snapshotKey,
+    );
 
     return buildControlPlane(stateStore, clock, tokenConfig);
 }
 
 if (require.main === module) {
-    const runtimeConfig = loadControlPlaneRuntimeConfig();
-    const controlPlane = createDurableControlPlane(
-        runtimeConfig.persistence_db_path,
-        undefined,
-        runtimeConfig.token_config,
-    );
-    const server = createControlPlaneServer(
-        controlPlane.services,
-        {
-            adminApiEnabled: runtimeConfig.admin_api_enabled,
-            adminToken: runtimeConfig.admin_token,
-            maxJsonBodyBytes: runtimeConfig.max_json_body_bytes,
-        },
-    );
-    const port = runtimeConfig.port;
-
-    server.listen(port, () => {
-        process.stdout.write(
-            `rezilient-auth-control-plane listening on port ${port}\n`,
+    void (async () => {
+        const runtimeConfig = loadControlPlaneRuntimeConfig();
+        const controlPlane = await createDurableControlPlane(
+            runtimeConfig.persistence_pg_url,
+            undefined,
+            runtimeConfig.token_config,
+            {
+                snapshot_key: runtimeConfig.persistence_snapshot_key,
+            },
         );
+        const server = createControlPlaneServer(
+            controlPlane.services,
+            {
+                adminApiEnabled: runtimeConfig.admin_api_enabled,
+                adminToken: runtimeConfig.admin_token,
+                maxJsonBodyBytes: runtimeConfig.max_json_body_bytes,
+            },
+        );
+        const port = runtimeConfig.port;
+
+        server.listen(port, () => {
+            process.stdout.write(
+                `rezilient-auth-control-plane listening on port ${port}\n`,
+            );
+        });
+    })().catch((error: unknown) => {
+        const message = error instanceof Error
+            ? (error.stack ?? error.message)
+            : String(error);
+
+        process.stderr.write(`${message}\n`);
+        process.exitCode = 1;
     });
 }
 

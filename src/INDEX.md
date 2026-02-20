@@ -1,7 +1,7 @@
 # src Index
 
 - `index.ts`: bootstraps control plane, validates runtime config, and defaults
-  to durable SQLite-backed state.
+  to durable Postgres-backed state.
 - `server.ts`: HTTP routing for admin, enrollment, token, and health endpoints.
 - `server.ts`: HTTP routing for admin, enrollment, token, and health endpoints,
   plus RS-14 admin overview, instance/tenant read APIs, and
@@ -15,7 +15,7 @@
 - `audit/audit.service.test.ts`: normalized cross-service audit emission and
   replay-order list coverage.
 - `persistence/state-store.ts`: shared persistence interface for ACP state.
-- `persistence/sqlite-state-store.ts`: SQLite-backed durable state store.
+- `persistence/postgres-state-store.ts`: Postgres-backed durable state store.
 - `persistence/in-memory-state-store.ts`: in-memory store used by tests.
 - `registry/types.ts`: tenant/instance/credential domain models.
 - `registry/registry.service.ts`: registry lifecycle operations.

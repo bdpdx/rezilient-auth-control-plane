@@ -70,8 +70,10 @@ export class RotationService {
         private readonly clock: Clock,
     ) {}
 
-    startRotation(input: StartRotationInput): StartRotationResult {
-        const instance = this.registry.getInstance(input.instance_id);
+    async startRotation(
+        input: StartRotationInput,
+    ): Promise<StartRotationResult> {
+        const instance = await this.registry.getInstance(input.instance_id);
 
         if (!instance || !instance.client_credentials) {
             throw new Error('instance has no credentials to rotate');
@@ -90,14 +92,14 @@ export class RotationService {
             now.getTime() + (input.overlap_seconds * 1000),
         ).toISOString();
 
-        this.registry.addNextSecretVersion({
+        await this.registry.addNextSecretVersion({
             instance_id: input.instance_id,
             version_id: nextVersion.version_id,
             secret_hash: sha256Hex(nextClientSecret),
             valid_until: overlapExpiresAt,
         });
 
-        this.audit.record({
+        await this.audit.record({
             event_type: 'secret_rotation_started',
             actor: input.requested_by,
             tenant_id: instance.tenant_id,
@@ -117,8 +119,11 @@ export class RotationService {
         };
     }
 
-    recordAdoption(instanceId: string, secretVersionId: string): void {
-        const before = this.registry.getInstance(instanceId);
+    async recordAdoption(
+        instanceId: string,
+        secretVersionId: string,
+    ): Promise<void> {
+        const before = await this.registry.getInstance(instanceId);
 
         if (!before || !before.client_credentials) {
             return;
@@ -132,9 +137,12 @@ export class RotationService {
             return;
         }
 
-        const updated = this.registry.markSecretAdopted(instanceId, secretVersionId);
+        const updated = await this.registry.markSecretAdopted(
+            instanceId,
+            secretVersionId,
+        );
 
-        this.audit.record({
+        await this.audit.record({
             event_type: 'secret_rotation_adopted',
             tenant_id: updated.tenant_id,
             instance_id: updated.instance_id,
@@ -145,10 +153,12 @@ export class RotationService {
         });
     }
 
-    completeRotation(input: CompleteRotationInput): CompleteRotationResult {
-        const promoted = this.registry.promoteNextSecret(input.instance_id);
+    async completeRotation(
+        input: CompleteRotationInput,
+    ): Promise<CompleteRotationResult> {
+        const promoted = await this.registry.promoteNextSecret(input.instance_id);
 
-        this.audit.record({
+        await this.audit.record({
             event_type: 'secret_rotation_completed',
             actor: input.requested_by,
             tenant_id: promoted.instance.tenant_id,
@@ -167,13 +177,13 @@ export class RotationService {
         };
     }
 
-    revokeSecret(input: RevokeSecretInput): void {
-        const updated = this.registry.revokeSecretVersion(
+    async revokeSecret(input: RevokeSecretInput): Promise<void> {
+        const updated = await this.registry.revokeSecretVersion(
             input.instance_id,
             input.secret_version_id,
         );
 
-        this.audit.record({
+        await this.audit.record({
             event_type: 'secret_revoked',
             actor: input.requested_by,
             tenant_id: updated.tenant_id,

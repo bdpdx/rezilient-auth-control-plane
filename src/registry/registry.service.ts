@@ -53,8 +53,8 @@ export class RegistryService {
             new InMemoryControlPlaneStateStore(),
     ) {}
 
-    createTenant(input: CreateTenantInput): TenantRecord {
-        const tenant = this.stateStore.mutate((state) => {
+    async createTenant(input: CreateTenantInput): Promise<TenantRecord> {
+        const tenant = await this.stateStore.mutate((state) => {
             if (state.tenants[input.tenant_id]) {
                 throw new Error(`tenant already exists: ${input.tenant_id}`);
             }
@@ -87,7 +87,7 @@ export class RegistryService {
             return cloneTenant(created);
         });
 
-        this.audit.record({
+        await this.audit.record({
             event_type: 'tenant_created',
             actor: input.actor,
             tenant_id: tenant.tenant_id,
@@ -100,12 +100,12 @@ export class RegistryService {
         return tenant;
     }
 
-    setTenantState(
+    async setTenantState(
         tenantId: string,
         stateValue: TenantRecord['state'],
         actor?: string,
-    ): TenantRecord {
-        const tenant = this.stateStore.mutate((state) => {
+    ): Promise<TenantRecord> {
+        const tenant = await this.stateStore.mutate((state) => {
             const tenantRecord = this.getTenantOrThrow(state, tenantId);
 
             if (!TENANT_STATES.includes(stateValue)) {
@@ -118,7 +118,7 @@ export class RegistryService {
             return cloneTenant(tenantRecord);
         });
 
-        this.audit.record({
+        await this.audit.record({
             event_type: 'tenant_state_changed',
             actor,
             tenant_id: tenant.tenant_id,
@@ -130,12 +130,12 @@ export class RegistryService {
         return tenant;
     }
 
-    setTenantEntitlement(
+    async setTenantEntitlement(
         tenantId: string,
         entitlementState: TenantRecord['entitlement_state'],
         actor?: string,
-    ): TenantRecord {
-        const tenant = this.stateStore.mutate((state) => {
+    ): Promise<TenantRecord> {
+        const tenant = await this.stateStore.mutate((state) => {
             const tenantRecord = this.getTenantOrThrow(state, tenantId);
 
             if (!ENTITLEMENT_STATES.includes(entitlementState)) {
@@ -150,7 +150,7 @@ export class RegistryService {
             return cloneTenant(tenantRecord);
         });
 
-        this.audit.record({
+        await this.audit.record({
             event_type: 'tenant_entitlement_changed',
             actor,
             tenant_id: tenant.tenant_id,
@@ -162,8 +162,8 @@ export class RegistryService {
         return tenant;
     }
 
-    createInstance(input: CreateInstanceInput): InstanceRecord {
-        const instance = this.stateStore.mutate((state) => {
+    async createInstance(input: CreateInstanceInput): Promise<InstanceRecord> {
+        const instance = await this.stateStore.mutate((state) => {
             if (state.instances[input.instance_id]) {
                 throw new Error(`instance already exists: ${input.instance_id}`);
             }
@@ -210,7 +210,7 @@ export class RegistryService {
             return cloneInstance(created);
         });
 
-        this.audit.record({
+        await this.audit.record({
             event_type: 'instance_created',
             actor: input.actor,
             tenant_id: instance.tenant_id,
@@ -225,12 +225,12 @@ export class RegistryService {
         return instance;
     }
 
-    setInstanceState(
+    async setInstanceState(
         instanceId: string,
         stateValue: InstanceRecord['state'],
         actor?: string,
-    ): InstanceRecord {
-        const instance = this.stateStore.mutate((state) => {
+    ): Promise<InstanceRecord> {
+        const instance = await this.stateStore.mutate((state) => {
             const record = this.getInstanceOrThrow(state, instanceId);
 
             if (!INSTANCE_STATES.includes(stateValue)) {
@@ -243,7 +243,7 @@ export class RegistryService {
             return cloneInstance(record);
         });
 
-        this.audit.record({
+        await this.audit.record({
             event_type: 'instance_state_changed',
             actor,
             tenant_id: instance.tenant_id,
@@ -256,12 +256,12 @@ export class RegistryService {
         return instance;
     }
 
-    setInstanceAllowedServices(
+    async setInstanceAllowedServices(
         instanceId: string,
         allowedServices: InstanceRecord['allowed_services'],
         actor?: string,
-    ): InstanceRecord {
-        const instance = this.stateStore.mutate((state) => {
+    ): Promise<InstanceRecord> {
+        const instance = await this.stateStore.mutate((state) => {
             const record = this.getInstanceOrThrow(state, instanceId);
 
             for (const service of allowedServices) {
@@ -278,7 +278,7 @@ export class RegistryService {
             return cloneInstance(record);
         });
 
-        this.audit.record({
+        await this.audit.record({
             event_type: 'instance_services_updated',
             actor,
             tenant_id: instance.tenant_id,
@@ -291,8 +291,10 @@ export class RegistryService {
         return instance;
     }
 
-    setInitialCredentials(input: InitialCredentialsInput): InstanceRecord {
-        return this.stateStore.mutate((state) => {
+    async setInitialCredentials(
+        input: InitialCredentialsInput,
+    ): Promise<InstanceRecord> {
+        return await this.stateStore.mutate((state) => {
             const instance = this.getInstanceOrThrow(state, input.instance_id);
 
             if (state.client_id_to_instance[input.client_id]) {
@@ -328,8 +330,10 @@ export class RegistryService {
         });
     }
 
-    addNextSecretVersion(input: AddSecretVersionInput): InstanceRecord {
-        return this.stateStore.mutate((state) => {
+    async addNextSecretVersion(
+        input: AddSecretVersionInput,
+    ): Promise<InstanceRecord> {
+        return await this.stateStore.mutate((state) => {
             const instance = this.getInstanceOrThrow(state, input.instance_id);
             const credentials = this.getCredentialsOrThrow(instance);
 
@@ -363,8 +367,11 @@ export class RegistryService {
         });
     }
 
-    markSecretAdopted(instanceId: string, versionId: string): InstanceRecord {
-        return this.stateStore.mutate((state) => {
+    async markSecretAdopted(
+        instanceId: string,
+        versionId: string,
+    ): Promise<InstanceRecord> {
+        return await this.stateStore.mutate((state) => {
             const instance = this.getInstanceOrThrow(state, instanceId);
             const credentials = this.getCredentialsOrThrow(instance);
             const secret = credentials.secret_versions.find(
@@ -384,12 +391,12 @@ export class RegistryService {
         });
     }
 
-    promoteNextSecret(instanceId: string): {
+    async promoteNextSecret(instanceId: string): Promise<{
         instance: InstanceRecord;
         old_secret_version_id: string;
         new_secret_version_id: string;
-    } {
-        return this.stateStore.mutate((state) => {
+    }> {
+        return await this.stateStore.mutate((state) => {
             const instance = this.getInstanceOrThrow(state, instanceId);
             const credentials = this.getCredentialsOrThrow(instance);
             const nextId = credentials.next_secret_version_id;
@@ -438,8 +445,11 @@ export class RegistryService {
         });
     }
 
-    revokeSecretVersion(instanceId: string, versionId: string): InstanceRecord {
-        return this.stateStore.mutate((state) => {
+    async revokeSecretVersion(
+        instanceId: string,
+        versionId: string,
+    ): Promise<InstanceRecord> {
+        return await this.stateStore.mutate((state) => {
             const instance = this.getInstanceOrThrow(state, instanceId);
             const credentials = this.getCredentialsOrThrow(instance);
             const secret = credentials.secret_versions.find(
@@ -462,34 +472,36 @@ export class RegistryService {
         });
     }
 
-    getTenant(tenantId: string): TenantRecord | undefined {
-        const tenant = this.stateStore.read().tenants[tenantId];
+    async getTenant(tenantId: string): Promise<TenantRecord | undefined> {
+        const tenant = (await this.stateStore.read()).tenants[tenantId];
 
         return tenant ? cloneTenant(tenant) : undefined;
     }
 
-    listTenants(): TenantRecord[] {
-        return Object.values(this.stateStore.read().tenants)
+    async listTenants(): Promise<TenantRecord[]> {
+        return Object.values((await this.stateStore.read()).tenants)
             .map((tenant) => cloneTenant(tenant))
             .sort((left, right) => left.tenant_id.localeCompare(right.tenant_id));
     }
 
-    getInstance(instanceId: string): InstanceRecord | undefined {
-        const instance = this.stateStore.read().instances[instanceId];
+    async getInstance(instanceId: string): Promise<InstanceRecord | undefined> {
+        const instance = (await this.stateStore.read()).instances[instanceId];
 
         return instance ? cloneInstance(instance) : undefined;
     }
 
-    listInstances(): InstanceRecord[] {
-        return Object.values(this.stateStore.read().instances)
+    async listInstances(): Promise<InstanceRecord[]> {
+        return Object.values((await this.stateStore.read()).instances)
             .map((instance) => cloneInstance(instance))
             .sort((left, right) =>
                 left.instance_id.localeCompare(right.instance_id),
             );
     }
 
-    getInstanceByClientId(clientId: string): InstanceRecord | undefined {
-        const state = this.stateStore.read();
+    async getInstanceByClientId(
+        clientId: string,
+    ): Promise<InstanceRecord | undefined> {
+        const state = await this.stateStore.read();
         const instanceId = state.client_id_to_instance[clientId];
 
         if (!instanceId) {

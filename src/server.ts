@@ -422,10 +422,12 @@ function buildInstanceAdminRecord(instance: InstanceRecord): Record<string, unkn
     };
 }
 
-function buildOverviewPayload(services: ControlPlaneServices): Record<string, unknown> {
-    const tenants = services.registry.listTenants();
-    const instances = services.registry.listInstances();
-    const events = services.audit.list();
+async function buildOverviewPayload(
+    services: ControlPlaneServices,
+): Promise<Record<string, unknown>> {
+    const tenants = await services.registry.listTenants();
+    const instances = await services.registry.listInstances();
+    const events = await services.audit.list();
 
     let enrollmentCodesIssued = 0;
     let enrollmentCodesExchanged = 0;
@@ -492,7 +494,7 @@ function buildOverviewPayload(services: ControlPlaneServices): Record<string, un
     }
 
     return {
-        outage_active: services.token.isOutageModeActive(),
+        outage_active: await services.token.isOutageModeActive(),
         degraded_mode_counters: {
             token_mint_denied_outage_total: outageDeniedTotal,
             token_refresh_denied_outage_total: outageRefreshDeniedTotal,
@@ -549,7 +551,7 @@ export function createControlPlaneServer(
             if (method === 'GET' && pathname === '/v1/health') {
                 sendJson(response, 200, {
                     ok: true,
-                    outage_active: services.token.isOutageModeActive(),
+                    outage_active: await services.token.isOutageModeActive(),
                 });
 
                 return;
@@ -559,7 +561,7 @@ export function createControlPlaneServer(
                 const limit = parseAuditEventLimit(
                     parsedUrl.searchParams.get('limit'),
                 );
-                const events = services.audit.list(limit);
+                const events = await services.audit.list(limit);
 
                 sendJson(response, 200, {
                     events,
@@ -575,7 +577,7 @@ export function createControlPlaneServer(
                 const limit = parseAuditEventLimit(
                     parsedUrl.searchParams.get('limit'),
                 );
-                const events = services.audit.listCrossService(limit);
+                const events = await services.audit.listCrossService(limit);
 
                 sendJson(response, 200, {
                     events,
@@ -586,14 +588,14 @@ export function createControlPlaneServer(
 
             if (method === 'GET' && pathname === '/v1/admin/tenants') {
                 sendJson(response, 200, {
-                    tenants: services.registry.listTenants(),
+                    tenants: await services.registry.listTenants(),
                 });
 
                 return;
             }
 
             if (method === 'GET' && pathname === '/v1/admin/instances') {
-                const instances = services.registry.listInstances();
+                const instances = await services.registry.listInstances();
 
                 sendJson(response, 200, {
                     instances: instances.map((instance) =>
@@ -610,7 +612,7 @@ export function createControlPlaneServer(
 
             if (method === 'GET' && instanceGetMatch) {
                 const instanceId = decodeURIComponent(instanceGetMatch[1]);
-                const instance = services.registry.getInstance(instanceId);
+                const instance = await services.registry.getInstance(instanceId);
 
                 if (!instance) {
                     sendJson(response, 404, {
@@ -628,7 +630,7 @@ export function createControlPlaneServer(
             }
 
             if (method === 'GET' && pathname === '/v1/admin/degraded-mode') {
-                const overview = buildOverviewPayload(services);
+                const overview = await buildOverviewPayload(services);
 
                 sendJson(response, 200, {
                     outage_active: overview.outage_active,
@@ -639,7 +641,7 @@ export function createControlPlaneServer(
             }
 
             if (method === 'GET' && pathname === '/v1/admin/overview') {
-                sendJson(response, 200, buildOverviewPayload(services));
+                sendJson(response, 200, await buildOverviewPayload(services));
 
                 return;
             }
@@ -655,7 +657,7 @@ export function createControlPlaneServer(
             const body = await readJsonBody(request, maxJsonBodyBytes);
 
             if (pathname === '/v1/admin/tenants') {
-                const tenant = services.registry.createTenant({
+                const tenant = await services.registry.createTenant({
                     tenant_id: asString(body.tenant_id, 'tenant_id'),
                     name: asString(body.name, 'name'),
                     state: body.state as never,
@@ -674,7 +676,7 @@ export function createControlPlaneServer(
                 const allowedServices = body.allowed_services
                     ? asStringArray(body.allowed_services, 'allowed_services')
                     : undefined;
-                const instance = services.registry.createInstance({
+                const instance = await services.registry.createInstance({
                     instance_id: asString(body.instance_id, 'instance_id'),
                     tenant_id: asString(body.tenant_id, 'tenant_id'),
                     source: asString(body.source, 'source'),
@@ -691,7 +693,7 @@ export function createControlPlaneServer(
             }
 
             if (pathname === '/v1/admin/enrollment-codes') {
-                const result = services.enrollment.issueEnrollmentCode({
+                const result = await services.enrollment.issueEnrollmentCode({
                     tenant_id: asString(body.tenant_id, 'tenant_id'),
                     instance_id: asString(body.instance_id, 'instance_id'),
                     requested_by: asOptionalString(body.requested_by),
@@ -706,7 +708,7 @@ export function createControlPlaneServer(
             }
 
             if (pathname === '/v1/auth/enroll/exchange') {
-                const result = services.enrollment.exchangeEnrollmentCode(
+                const result = await services.enrollment.exchangeEnrollmentCode(
                     asString(body.enrollment_code, 'enrollment_code'),
                 );
 
@@ -716,7 +718,7 @@ export function createControlPlaneServer(
             }
 
             if (pathname === '/v1/auth/token') {
-                const result = services.token.mintToken({
+                const result = await services.token.mintToken({
                     grant_type: asOptionalString(body.grant_type),
                     flow: body.flow as 'mint' | 'refresh' | undefined,
                     client_id: asString(body.client_id, 'client_id'),
@@ -733,7 +735,7 @@ export function createControlPlaneServer(
                 const expectedScope = body.expected_service_scope
                     ? asString(body.expected_service_scope, 'expected_service_scope')
                     : undefined;
-                const result = services.token.validateToken({
+                const result = await services.token.validateToken({
                     access_token: asString(body.access_token, 'access_token'),
                     expected_service_scope: expectedScope as ServiceScope | undefined,
                 });
@@ -749,13 +751,13 @@ export function createControlPlaneServer(
                     'outage_active',
                 );
 
-                services.token.setOutageMode(
+                await services.token.setOutageMode(
                     outageActive,
                     asOptionalString(body.actor),
                 );
 
                 sendJson(response, 200, {
-                    outage_active: services.token.isOutageModeActive(),
+                    outage_active: await services.token.isOutageModeActive(),
                 });
 
                 return;
@@ -765,7 +767,7 @@ export function createControlPlaneServer(
 
             if (rotateMatch) {
                 const instanceId = decodeURIComponent(rotateMatch[1]);
-                const result = services.rotation.startRotation({
+                const result = await services.rotation.startRotation({
                     instance_id: instanceId,
                     requested_by: asOptionalString(body.requested_by),
                     overlap_seconds: body.overlap_seconds === undefined
@@ -785,7 +787,7 @@ export function createControlPlaneServer(
 
             if (completeMatch) {
                 const instanceId = decodeURIComponent(completeMatch[1]);
-                const result = services.rotation.completeRotation({
+                const result = await services.rotation.completeRotation({
                     instance_id: instanceId,
                     requested_by: asOptionalString(body.requested_by),
                 });
@@ -800,7 +802,7 @@ export function createControlPlaneServer(
             if (revokeMatch) {
                 const instanceId = decodeURIComponent(revokeMatch[1]);
 
-                services.rotation.revokeSecret({
+                await services.rotation.revokeSecret({
                     instance_id: instanceId,
                     secret_version_id: asString(
                         body.secret_version_id,
@@ -821,7 +823,7 @@ export function createControlPlaneServer(
 
             if (stateMatch) {
                 const instanceId = decodeURIComponent(stateMatch[1]);
-                const instance = services.registry.setInstanceState(
+                const instance = await services.registry.setInstanceState(
                     instanceId,
                     asString(body.state, 'state') as never,
                     asOptionalString(body.actor),
@@ -842,7 +844,7 @@ export function createControlPlaneServer(
                     body.allowed_services,
                     'allowed_services',
                 );
-                const instance = services.registry.setInstanceAllowedServices(
+                const instance = await services.registry.setInstanceAllowedServices(
                     instanceId,
                     allowedServices as ServiceScope[],
                     asOptionalString(body.actor),
@@ -859,7 +861,7 @@ export function createControlPlaneServer(
 
             if (tenantStateMatch) {
                 const tenantId = decodeURIComponent(tenantStateMatch[1]);
-                const tenant = services.registry.setTenantState(
+                const tenant = await services.registry.setTenantState(
                     tenantId,
                     asString(body.state, 'state') as never,
                     asOptionalString(body.actor),
@@ -878,7 +880,7 @@ export function createControlPlaneServer(
 
             if (tenantEntitlementMatch) {
                 const tenantId = decodeURIComponent(tenantEntitlementMatch[1]);
-                const tenant = services.registry.setTenantEntitlement(
+                const tenant = await services.registry.setTenantEntitlement(
                     tenantId,
                     asString(body.entitlement_state, 'entitlement_state') as never,
                     asOptionalString(body.actor),

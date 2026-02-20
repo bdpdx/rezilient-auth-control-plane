@@ -13,15 +13,21 @@ export class InMemoryControlPlaneStateStore implements ControlPlaneStateStore {
         this.state = cloneControlPlaneState(sourceState);
     }
 
-    read(): ControlPlaneState {
+    async read(): Promise<ControlPlaneState> {
         return cloneControlPlaneState(this.state);
     }
 
-    mutate<T>(mutator: (state: ControlPlaneState) => T): T {
+    async mutate<T>(
+        mutator: (state: ControlPlaneState) => T | Promise<T>,
+    ): Promise<T> {
         const workingState = cloneControlPlaneState(this.state);
-        const result = mutator(workingState);
+        const result = await mutator(workingState);
         this.state = workingState;
 
         return result;
+    }
+
+    async close(): Promise<void> {
+        return Promise.resolve();
     }
 }

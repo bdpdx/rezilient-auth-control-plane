@@ -5,11 +5,11 @@ import {
     createFixture,
 } from './test-helpers';
 
-test('Outage grace decision pauses only after grace window is exhausted', () => {
+test('Outage grace decision pauses only after grace window is exhausted', async () => {
     const fixture = createFixture();
-    const credentials = bootstrapRegistryAndCredentials(fixture);
+    const credentials = await bootstrapRegistryAndCredentials(fixture);
 
-    const mint = fixture.control_plane.services.token.mintToken({
+    const mint = await fixture.control_plane.services.token.mintToken({
         client_id: credentials.client_id,
         client_secret: credentials.client_secret,
         service_scope: 'reg',
@@ -21,66 +21,81 @@ test('Outage grace decision pauses only after grace window is exhausted', () => 
         return;
     }
 
-    fixture.control_plane.services.token.setOutageMode(true);
+    await fixture.control_plane.services.token.setOutageMode(true);
 
     fixture.clock.advanceSeconds(310);
 
     const withinGrace = fixture.control_plane.services.token
         .evaluateRefreshDuringOutage(mint.expires_at);
+    const withinGraceResult = await withinGrace;
 
-    assert.equal(withinGrace.action, 'retry_within_grace');
-    assert.equal(withinGrace.reason_code, 'blocked_auth_control_plane_outage');
+    assert.equal(withinGraceResult.action, 'retry_within_grace');
+    assert.equal(
+        withinGraceResult.reason_code,
+        'blocked_auth_control_plane_outage',
+    );
 
     fixture.clock.advanceSeconds(121);
 
     const exhaustedGrace = fixture.control_plane.services.token
         .evaluateRefreshDuringOutage(mint.expires_at);
+    const exhaustedGraceResult = await exhaustedGrace;
 
-    assert.equal(exhaustedGrace.action, 'pause_in_flight');
+    assert.equal(exhaustedGraceResult.action, 'pause_in_flight');
     assert.equal(
-        exhaustedGrace.reason_code,
+        exhaustedGraceResult.reason_code,
         'paused_token_refresh_grace_exhausted',
     );
 });
 
-test('Entitlement/instance disable behavior pauses at next chunk boundary', () => {
+test('Entitlement/instance disable behavior pauses at next chunk boundary', async () => {
     const fixture = createFixture();
-    const credentials = bootstrapRegistryAndCredentials(fixture);
+    const credentials = await bootstrapRegistryAndCredentials(fixture);
 
     const continueActive = fixture.control_plane.services.token
         .evaluateInFlightEntitlement(credentials.instance_id, false);
+    const continueActiveResult = await continueActive;
 
-    assert.equal(continueActive.action, 'continue');
+    assert.equal(continueActiveResult.action, 'continue');
 
-    fixture.control_plane.services.registry.setTenantEntitlement(
+    await fixture.control_plane.services.registry.setTenantEntitlement(
         credentials.tenant_id,
         'disabled',
     );
 
     const beforeBoundary = fixture.control_plane.services.token
         .evaluateInFlightEntitlement(credentials.instance_id, false);
+    const beforeBoundaryResult = await beforeBoundary;
 
-    assert.equal(beforeBoundary.action, 'continue_until_chunk_boundary');
-    assert.equal(beforeBoundary.reason_code, 'paused_entitlement_disabled');
+    assert.equal(beforeBoundaryResult.action, 'continue_until_chunk_boundary');
+    assert.equal(
+        beforeBoundaryResult.reason_code,
+        'paused_entitlement_disabled',
+    );
 
     const atBoundary = fixture.control_plane.services.token
         .evaluateInFlightEntitlement(credentials.instance_id, true);
+    const atBoundaryResult = await atBoundary;
 
-    assert.equal(atBoundary.action, 'pause');
-    assert.equal(atBoundary.reason_code, 'paused_entitlement_disabled');
+    assert.equal(atBoundaryResult.action, 'pause');
+    assert.equal(atBoundaryResult.reason_code, 'paused_entitlement_disabled');
 
-    fixture.control_plane.services.registry.setTenantEntitlement(
+    await fixture.control_plane.services.registry.setTenantEntitlement(
         credentials.tenant_id,
         'active',
     );
-    fixture.control_plane.services.registry.setInstanceState(
+    await fixture.control_plane.services.registry.setInstanceState(
         credentials.instance_id,
         'disabled',
     );
 
     const instanceAtBoundary = fixture.control_plane.services.token
         .evaluateInFlightEntitlement(credentials.instance_id, true);
+    const instanceAtBoundaryResult = await instanceAtBoundary;
 
-    assert.equal(instanceAtBoundary.action, 'pause');
-    assert.equal(instanceAtBoundary.reason_code, 'paused_instance_disabled');
+    assert.equal(instanceAtBoundaryResult.action, 'pause');
+    assert.equal(
+        instanceAtBoundaryResult.reason_code,
+        'paused_instance_disabled',
+    );
 });

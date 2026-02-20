@@ -7,7 +7,7 @@ Purpose:
 
 Primary entrypoints:
 - `src/index.ts`: process bootstrap, runtime config validation, and durable
-  SQLite-backed state store wiring.
+  Postgres-backed state store wiring.
 - `src/server.ts`: minimal HTTP API for admin + token endpoints.
 - `src/server.ts`: HTTP API for admin/token endpoints, including RS-14 admin
   overview + tenant/instance read surfaces and optional admin-token guard.
@@ -17,7 +17,7 @@ Primary entrypoints:
 - `src/rotation/rotation.service.ts`: dual-secret overlap rotation lifecycle.
 - `src/audit/audit.service.ts`: append-only auth audit stream with normalized
   cross-service audit emission (`audit.event.v1`).
-- `src/persistence/*`: shared state-store abstractions and SQLite/in-memory
+- `src/persistence/*`: shared state-store abstractions with Postgres/in-memory
   implementations for durable ACP state.
 
 Testing:

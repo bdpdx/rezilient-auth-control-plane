@@ -150,69 +150,75 @@ export class TokenService {
             new InMemoryControlPlaneStateStore(),
     ) {}
 
-    setOutageMode(active: boolean, actor?: string): void {
-        this.stateStore.mutate((state) => {
+    async setOutageMode(active: boolean, actor?: string): Promise<void> {
+        await this.stateStore.mutate((state) => {
             state.outage_active = active;
         });
 
-        this.audit.record({
+        await this.audit.record({
             event_type: 'control_plane_outage_mode_changed',
             actor,
             metadata: {
-                outage_active: this.isOutageModeActive(),
+                outage_active: await this.isOutageModeActive(),
             },
         });
     }
 
-    isOutageModeActive(): boolean {
-        return this.stateStore.read().outage_active;
+    async isOutageModeActive(): Promise<boolean> {
+        return (await this.stateStore.read()).outage_active;
     }
 
-    mintToken(request: TokenMintRequest): TokenMintResult {
+    async mintToken(request: TokenMintRequest): Promise<TokenMintResult> {
         if (
             request.grant_type !== undefined &&
             request.grant_type !== 'client_credentials'
         ) {
-            return this.denyMint(request, 'denied_invalid_grant');
+            return await this.denyMint(request, 'denied_invalid_grant');
         }
 
         if (!isServiceScope(request.service_scope)) {
-            return this.denyMint(request, 'denied_service_not_allowed');
+            return await this.denyMint(request, 'denied_service_not_allowed');
         }
 
-        if (this.isOutageModeActive()) {
-            return this.denyMint(
+        if (await this.isOutageModeActive()) {
+            return await this.denyMint(
                 request,
                 'denied_auth_control_plane_outage',
             );
         }
 
-        const instance = this.registry.getInstanceByClientId(request.client_id);
+        const instance = await this.registry.getInstanceByClientId(
+            request.client_id,
+        );
 
         if (!instance || !instance.client_credentials) {
-            return this.denyMint(request, 'denied_invalid_client');
+            return await this.denyMint(request, 'denied_invalid_client');
         }
 
-        const tenant = this.registry.getTenant(instance.tenant_id);
+        const tenant = await this.registry.getTenant(instance.tenant_id);
 
         if (!tenant) {
-            return this.denyMint(request, 'denied_invalid_client', instance);
+            return await this.denyMint(
+                request,
+                'denied_invalid_client',
+                instance,
+            );
         }
 
         const tenantEligibility = this.evaluateTenantEligibility(tenant);
 
         if (tenantEligibility !== 'none') {
-            return this.denyMint(request, tenantEligibility, instance);
+            return await this.denyMint(request, tenantEligibility, instance);
         }
 
         const instanceEligibility = this.evaluateInstanceEligibility(instance);
 
         if (instanceEligibility !== 'none') {
-            return this.denyMint(request, instanceEligibility, instance);
+            return await this.denyMint(request, instanceEligibility, instance);
         }
 
         if (!instance.allowed_services.includes(request.service_scope)) {
-            return this.denyMint(
+            return await this.denyMint(
                 request,
                 'denied_service_not_allowed',
                 instance,
@@ -225,7 +231,11 @@ export class TokenService {
         );
 
         if (!matchedSecret) {
-            return this.denyMint(request, 'denied_invalid_secret', instance);
+            return await this.denyMint(
+                request,
+                'denied_invalid_secret',
+                instance,
+            );
         }
 
         const now = this.clock.now();
@@ -251,7 +261,7 @@ export class TokenService {
         );
 
         if (matchedSecret.is_next_version) {
-            this.rotation.recordAdoption(
+            await this.rotation.recordAdoption(
                 instance.instance_id,
                 matchedSecret.version_id,
             );
@@ -262,7 +272,7 @@ export class TokenService {
             ? 'token_refreshed'
             : 'token_minted';
 
-        this.audit.record({
+        await this.audit.record({
             event_type: successEventType,
             tenant_id: tenant.tenant_id,
             instance_id: instance.instance_id,
@@ -289,7 +299,9 @@ export class TokenService {
         };
     }
 
-    validateToken(request: TokenValidateRequest): TokenValidateResult {
+    async validateToken(
+        request: TokenValidateRequest,
+    ): Promise<TokenValidateResult> {
         const verified = verifyJwt(
             request.access_token,
             this.config.signing_key,
@@ -300,7 +312,7 @@ export class TokenService {
                 ? 'denied_token_malformed'
                 : 'denied_token_invalid_signature';
 
-            this.audit.record({
+            await this.audit.record({
                 event_type: 'token_validate_denied',
                 deny_reason_code: reason,
                 metadata: {
@@ -342,7 +354,7 @@ export class TokenService {
             const nowSeconds = Math.floor(this.clock.now().getTime() / 1000);
 
             if (nowSeconds > (claims.exp + this.config.token_clock_skew_seconds)) {
-                this.audit.record({
+                await this.audit.record({
                     event_type: 'token_validate_denied',
                     deny_reason_code: 'denied_token_expired',
                     tenant_id: claims.tenant_id,
@@ -364,7 +376,7 @@ export class TokenService {
                 request.expected_service_scope &&
                 claims.service_scope !== request.expected_service_scope
             ) {
-                this.audit.record({
+                await this.audit.record({
                     event_type: 'token_validate_denied',
                     deny_reason_code: 'denied_token_wrong_service_scope',
                     tenant_id: claims.tenant_id,
@@ -382,7 +394,7 @@ export class TokenService {
                 };
             }
 
-            this.audit.record({
+            await this.audit.record({
                 event_type: 'token_validated',
                 tenant_id: claims.tenant_id,
                 instance_id: claims.instance_id,
@@ -405,8 +417,10 @@ export class TokenService {
         }
     }
 
-    evaluateRefreshDuringOutage(tokenExpiresAtIso: string): RefreshDecision {
-        if (!this.isOutageModeActive()) {
+    async evaluateRefreshDuringOutage(
+        tokenExpiresAtIso: string,
+    ): Promise<RefreshDecision> {
+        if (!(await this.isOutageModeActive())) {
             return {
                 action: 'refresh_allowed',
                 reason_code: 'none',
@@ -430,11 +444,11 @@ export class TokenService {
         };
     }
 
-    evaluateInFlightEntitlement(
+    async evaluateInFlightEntitlement(
         instanceId: string,
         atChunkBoundary: boolean,
-    ): InFlightEntitlementDecision {
-        const instance = this.registry.getInstance(instanceId);
+    ): Promise<InFlightEntitlementDecision> {
+        const instance = await this.registry.getInstance(instanceId);
 
         if (!instance) {
             return {
@@ -443,7 +457,7 @@ export class TokenService {
             };
         }
 
-        const tenant = this.registry.getTenant(instance.tenant_id);
+        const tenant = await this.registry.getTenant(instance.tenant_id);
 
         if (!tenant || tenant.state !== 'active' || tenant.entitlement_state !== 'active') {
             return {
@@ -527,12 +541,12 @@ export class TokenService {
         return undefined;
     }
 
-    private denyMint(
+    private async denyMint(
         request: TokenMintRequest,
         reasonCode: AuthDenyReasonCode,
         instance?: InstanceRecord,
-    ): TokenMintFailure {
-        this.audit.record({
+    ): Promise<TokenMintFailure> {
+        await this.audit.record({
             event_type: 'token_mint_denied',
             deny_reason_code: reasonCode,
             tenant_id: instance?.tenant_id,

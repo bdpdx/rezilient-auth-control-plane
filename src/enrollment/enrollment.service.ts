@@ -113,9 +113,11 @@ export class EnrollmentService {
             new InMemoryControlPlaneStateStore(),
     ) {}
 
-    issueEnrollmentCode(input: IssueEnrollmentCodeInput): IssueEnrollmentCodeResult {
-        const tenant = this.registry.getTenant(input.tenant_id);
-        const instance = this.registry.getInstance(input.instance_id);
+    async issueEnrollmentCode(
+        input: IssueEnrollmentCodeInput,
+    ): Promise<IssueEnrollmentCodeResult> {
+        const tenant = await this.registry.getTenant(input.tenant_id);
+        const instance = await this.registry.getInstance(input.instance_id);
 
         if (!tenant || !instance || instance.tenant_id !== tenant.tenant_id) {
             throw new Error('tenant/instance mapping not found');
@@ -139,12 +141,12 @@ export class EnrollmentService {
             issued_by: input.requested_by,
         };
 
-        this.stateStore.mutate((state) => {
+        await this.stateStore.mutate((state) => {
             state.enrollment_records[codeId] = record;
             state.code_hash_to_id[codeHash] = codeId;
         });
 
-        this.audit.record({
+        await this.audit.record({
             event_type: 'enrollment_code_issued',
             actor: input.requested_by,
             tenant_id: tenant.tenant_id,
@@ -163,10 +165,12 @@ export class EnrollmentService {
         };
     }
 
-    exchangeEnrollmentCode(enrollmentCode: string): ExchangeEnrollmentCodeResult {
+    async exchangeEnrollmentCode(
+        enrollmentCode: string,
+    ): Promise<ExchangeEnrollmentCodeResult> {
         const codeHash = sha256Hex(enrollmentCode);
         const nowIso = this.clock.now().toISOString();
-        const stateResult = this.stateStore.mutate((state) => {
+        const stateResult = await this.stateStore.mutate((state) => {
             const codeId = state.code_hash_to_id[codeHash];
 
             if (!codeId) {
@@ -257,7 +261,7 @@ export class EnrollmentService {
         });
 
         if (!stateResult.success) {
-            this.audit.record({
+            await this.audit.record({
                 event_type: 'token_mint_denied',
                 tenant_id: stateResult.tenant_id,
                 instance_id: stateResult.instance_id,
@@ -274,7 +278,7 @@ export class EnrollmentService {
             };
         }
 
-        this.audit.record({
+        await this.audit.record({
             event_type: 'enrollment_code_exchanged',
             tenant_id: stateResult.tenant_id,
             instance_id: stateResult.instance_id,

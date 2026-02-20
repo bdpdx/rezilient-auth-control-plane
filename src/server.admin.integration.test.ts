@@ -162,13 +162,13 @@ test('oversized JSON requests return 413 payload too large', async () => {
 
 test('admin instance list reports enrollment and rotation states', async () => {
     const fixture = createFixture();
-    const credentials = bootstrapRegistryAndCredentials(fixture);
-    const rotation = fixture.control_plane.services.rotation.startRotation({
+    const credentials = await bootstrapRegistryAndCredentials(fixture);
+    const rotation = await fixture.control_plane.services.rotation.startRotation({
         instance_id: credentials.instance_id,
         overlap_seconds: 600,
     });
 
-    const adoptMint = fixture.control_plane.services.token.mintToken({
+    const adoptMint = await fixture.control_plane.services.token.mintToken({
         client_id: credentials.client_id,
         client_secret: rotation.next_client_secret,
         service_scope: 'rrs',
@@ -221,11 +221,11 @@ test('admin instance list reports enrollment and rotation states', async () => {
 
 test('admin overview surfaces degraded-mode and enrollment counters', async () => {
     const fixture = createFixture();
-    const credentials = bootstrapRegistryAndCredentials(fixture);
+    const credentials = await bootstrapRegistryAndCredentials(fixture);
 
-    fixture.control_plane.services.token.setOutageMode(true);
+    await fixture.control_plane.services.token.setOutageMode(true);
 
-    const deniedMint = fixture.control_plane.services.token.mintToken({
+    const deniedMint = await fixture.control_plane.services.token.mintToken({
         client_id: credentials.client_id,
         client_secret: credentials.client_secret,
         service_scope: 'rrs',
@@ -233,7 +233,7 @@ test('admin overview surfaces degraded-mode and enrollment counters', async () =
 
     assert.equal(deniedMint.success, false);
 
-    const deniedRefresh = fixture.control_plane.services.token.mintToken({
+    const deniedRefresh = await fixture.control_plane.services.token.mintToken({
         flow: 'refresh',
         client_id: credentials.client_id,
         client_secret: credentials.client_secret,
@@ -279,7 +279,7 @@ test('admin overview surfaces degraded-mode and enrollment counters', async () =
 
 test('admin lifecycle endpoints return not_found/conflict reason codes', async () => {
     const fixture = createFixture();
-    fixture.control_plane.services.registry.createTenant({
+    await fixture.control_plane.services.registry.createTenant({
         tenant_id: 'tenant-acme',
         name: 'Acme',
     });
@@ -329,7 +329,7 @@ test('admin lifecycle endpoints return not_found/conflict reason codes', async (
 
 test('admin lifecycle endpoints enforce strict validation', async () => {
     const fixture = createFixture();
-    const credentials = bootstrapRegistryAndCredentials(fixture);
+    const credentials = await bootstrapRegistryAndCredentials(fixture);
 
     const server = createControlPlaneServer(fixture.control_plane.services, {
         adminToken: 'admin-secret',
@@ -424,9 +424,9 @@ test('admin lifecycle endpoints enforce strict validation', async () => {
 
 test('admin cross-service audit endpoint returns normalized events', async () => {
     const fixture = createFixture();
-    const credentials = bootstrapRegistryAndCredentials(fixture);
+    const credentials = await bootstrapRegistryAndCredentials(fixture);
 
-    const minted = fixture.control_plane.services.token.mintToken({
+    const minted = await fixture.control_plane.services.token.mintToken({
         client_id: credentials.client_id,
         client_secret: credentials.client_secret,
         service_scope: 'reg',
@@ -465,7 +465,7 @@ test('admin cross-service audit endpoint returns normalized events', async () =>
 
 test('rotation completion requires adopted next secret', async () => {
     const fixture = createFixture();
-    const credentials = bootstrapRegistryAndCredentials(fixture);
+    const credentials = await bootstrapRegistryAndCredentials(fixture);
 
     const server = createControlPlaneServer(fixture.control_plane.services, {
         adminToken: 'admin-secret',
