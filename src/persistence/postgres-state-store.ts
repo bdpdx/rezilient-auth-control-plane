@@ -13,13 +13,13 @@ interface SnapshotRow {
 
 const DEFAULT_SNAPSHOT_KEY = 'default';
 
-const CREATE_TABLE_SQL = `
-CREATE TABLE IF NOT EXISTS acp_state_snapshots (
-    snapshot_key TEXT PRIMARY KEY,
-    version BIGINT NOT NULL,
-    state_json JSONB NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-)
+const CHECK_SNAPSHOT_TABLE_SQL = `
+SELECT EXISTS (
+    SELECT 1
+    FROM information_schema.tables
+    WHERE table_schema = 'public'
+      AND table_name = 'acp_state_snapshots'
+) AS exists
 `;
 
 const SELECT_SNAPSHOT_SQL = `
@@ -166,7 +166,7 @@ export class PostgresControlPlaneStateStore implements ControlPlaneStateStore {
             snapshotKey,
         );
 
-        await store.ensureSchema();
+        await store.ensureBootstrapReady();
 
         return store;
     }
@@ -244,8 +244,20 @@ export class PostgresControlPlaneStateStore implements ControlPlaneStateStore {
         await this.pool.end();
     }
 
-    private async ensureSchema(): Promise<void> {
-        await this.pool.query(CREATE_TABLE_SQL);
+    private async ensureBootstrapReady(): Promise<void> {
+        const tableCheck = await this.pool.query<{ exists: boolean }>(
+            CHECK_SNAPSHOT_TABLE_SQL,
+        );
+        const exists = tableCheck.rows[0]?.exists === true;
+
+        if (!exists) {
+            throw new Error(
+                'ACP persistence schema is not initialized. ' +
+                'Run `npm run migrate:persistence` with AUTH_PERSISTENCE_PG_URL ' +
+                'before starting ACP.',
+            );
+        }
+
         await this.pool.query(
             UPSERT_SNAPSHOT_SQL,
             [

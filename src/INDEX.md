@@ -16,6 +16,8 @@
   replay-order list coverage.
 - `persistence/state-store.ts`: shared persistence interface for ACP state.
 - `persistence/postgres-state-store.ts`: Postgres-backed durable state store.
+- `persistence/migrate.ts`: versioned Postgres migration runner for ACP state
+  bootstrap.
 - `persistence/in-memory-state-store.ts`: in-memory store used by tests.
 - `registry/types.ts`: tenant/instance/credential domain models.
 - `registry/registry.service.ts`: registry lifecycle operations.

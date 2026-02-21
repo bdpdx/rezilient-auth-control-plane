@@ -18,7 +18,7 @@ Primary entrypoints:
 - `src/audit/audit.service.ts`: append-only auth audit stream with normalized
   cross-service audit emission (`audit.event.v1`).
 - `src/persistence/*`: shared state-store abstractions with Postgres/in-memory
-  implementations for durable ACP state.
+  implementations for durable ACP state, plus migration bootstrap runner.
 
 Testing:
 - `src/audit/audit.service.test.ts`

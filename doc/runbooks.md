@@ -1,5 +1,15 @@
 # Auth Control Plane Runbooks (RS-02)
 
+## 0. Postgres Bootstrap (Empty RDS)
+
+1. Build ACP artifacts:
+   - `npm run build`
+2. Run ACP persistence migrations against the target RDS DB:
+   - `AUTH_PERSISTENCE_PG_URL=postgres://... npm run migrate:persistence`
+3. Start ACP only after migration success.
+4. If ACP starts before bootstrap, it fails closed with a startup error that
+   instructs running migrations.
+
 ## 1. Compromised Secret
 
 1. Identify impacted `instance_id` and `secret_version_id`.
