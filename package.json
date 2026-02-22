@@ -5,6 +5,9 @@
     "license": "UNLICENSED",
     "type": "commonjs",
     "main": "dist/index.js",
+    "engines": {
+        "node": ">=24.0.0"
+    },
     "scripts": {
         "build": "tsc -p tsconfig.json",
         "migrate:persistence": "node dist/persistence/migrate.js",
