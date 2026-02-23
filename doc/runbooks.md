@@ -1,60 +1,37 @@
 # Auth Control Plane Runbooks (RS-02)
 
-## 0. Postgres Bootstrap (Empty RDS)
+Updated: 2026-02-23
 
-1. Build ACP artifacts:
-   - `npm run build`
-2. Run ACP persistence migrations against the target RDS DB:
-   - `AUTH_PERSISTENCE_PG_URL=postgres://... npm run migrate:persistence`
-3. Start ACP only after migration success.
-4. If ACP starts before bootstrap, it fails closed with a startup error that
-   instructs running migrations.
+This file is the ACP runbook index.
 
-## 1. Compromised Secret
+## Core runbooks
 
-1. Identify impacted `instance_id` and `secret_version_id`.
-2. Call `POST /v1/admin/instances/{instance_id}/revoke-secret` with reason
-   `compromised`.
-3. Immediately call `POST /v1/admin/instances/{instance_id}/rotate-secret` to
-   mint a replacement secret version.
-4. Confirm SN instance adopts the replacement credential.
-5. Complete rotation via `POST /v1/admin/instances/{instance_id}/complete-rotation`.
-   - ACP now rejects completion until the next secret has been adopted
-     (`reason_code=secret_rotation_not_adopted`).
-6. Verify deny/mint audit trail in `GET /v1/admin/audit-events`.
+1. Planned instance credential rotation:
+   - `../../doc/ops/acp/auth_secret_rotation_planned_runbook.md`
+2. Emergency secret revoke and containment:
+   - `../../doc/ops/acp/auth_secret_emergency_revoke_runbook.md`
+3. ACP persistence bootstrap and migration:
+   - `../../doc/ops/acp/persistence_setup.md`
+4. ACP secure bootstrap and fail-closed requirements:
+   - `../../doc/ops/acp/secure_bootstrap.md`
+5. ACP monitoring and alert hooks:
+   - `../../doc/ops/acp/monitoring_checks.md`
 
-## 2. Enrollment Failure
+## Quick endpoint map
 
-1. Confirm tenant and instance registry records exist and are active.
-2. Issue a new one-time enrollment code via
-   `POST /v1/admin/enrollment-codes`.
-3. Ensure code TTL has not expired and code has not been reused.
-4. Retry `POST /v1/auth/enroll/exchange`.
-5. Inspect audit events for reason codes:
-   - `denied_invalid_enrollment_code`
-   - `denied_enrollment_code_expired`
-   - `denied_enrollment_code_used`
-6. If repeated failure continues, invalidate stale onboarding artifacts and
-   re-run onboarding from tenant/instance setup.
+- `POST /v1/admin/instances/{instance_id}/rotate-secret`
+- `POST /v1/admin/instances/{instance_id}/complete-rotation`
+- `POST /v1/admin/instances/{instance_id}/revoke-secret`
+- `POST /v1/admin/instances/{instance_id}/state`
+- `POST /v1/admin/degraded-mode`
+- `GET /v1/admin/instances/{instance_id}`
+- `GET /v1/admin/overview`
+- `GET /v1/admin/audit-events?limit=<n>`
 
-## 3. Emergency Revoke
+## Fast triage notes
 
-1. Toggle outage/degraded mode if active attack is ongoing:
-   `POST /v1/admin/degraded-mode` with `outage_active=true`.
-2. Revoke affected secret versions immediately.
-3. Suspend or disable impacted instance via
-   `POST /v1/admin/instances/{instance_id}/state` when needed.
-4. Rotate to a new secret once containment is complete.
-5. Re-enable instance and clear outage mode after validation.
-6. Export and retain audit events for incident postmortem.
-
-## 4. Control Plane Outage
-
-1. Set degraded mode so mint path fails closed for new starts.
-2. Existing in-flight jobs continue until token expiry.
-3. During refresh attempts, honor grace policy:
-   - within grace: retry and remain paused-ready
-   - beyond grace: pause with `paused_token_refresh_grace_exhausted`
-4. Restore control plane availability and clear outage mode.
-5. Resume paused jobs after successful token refresh.
-6. Review audit stream for outage window and recovery actions.
+- `complete-rotation` fails with `reason_code=secret_rotation_not_adopted`
+  until mint succeeds with the next secret version.
+- Revoke and state-change actions must be followed by audit evidence export
+  from `/v1/admin/audit-events`.
+- Use degraded mode only for incident-wide containment, not routine rotation.
