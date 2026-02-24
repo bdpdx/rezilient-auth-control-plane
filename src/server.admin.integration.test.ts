@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { once } from 'node:events';
 import { Server } from 'node:http';
-import { test } from 'node:test';
+import { describe, test } from 'node:test';
 import { createControlPlaneServer } from './server';
 import {
     bootstrapRegistryAndCredentials,
@@ -160,6 +160,33 @@ test('oversized JSON requests return 413 payload too large', async () => {
     }
 });
 
+test('JSON array request body returns 400 with descriptive error', async () => {
+    const fixture = createFixture();
+    const server = createControlPlaneServer(fixture.control_plane.services, {
+        adminToken: 'admin-secret',
+    });
+    const baseUrl = await listen(server);
+
+    try {
+        const response = await postRaw(
+            baseUrl,
+            '/v1/auth/token',
+            '[1,2,3]',
+            {
+                'content-type': 'application/json',
+            },
+        );
+
+        assert.equal(response.status, 400);
+        assert.equal(
+            response.body.message,
+            'request body must be an object, not an array',
+        );
+    } finally {
+        await closeServer(server);
+    }
+});
+
 test('admin instance list reports enrollment and rotation states', async () => {
     const fixture = createFixture();
     const credentials = await bootstrapRegistryAndCredentials(fixture);
@@ -214,6 +241,23 @@ test('admin instance list reports enrollment and rotation states', async () => {
             typeof secretSummary.next_secret_version_id,
             'string',
         );
+
+        const creds = instances[0].client_credentials as Record<
+            string,
+            unknown
+        >;
+        assert.ok(creds);
+        const versions = creds.secret_versions as Array<
+            Record<string, unknown>
+        >;
+
+        for (const version of versions) {
+            assert.equal(
+                'secret_hash' in version,
+                false,
+                'secret_hash must not appear in admin instance response',
+            );
+        }
     } finally {
         await closeServer(server);
     }
@@ -422,6 +466,51 @@ test('admin lifecycle endpoints enforce strict validation', async () => {
     }
 });
 
+test('token mint rejects invalid flow values', async () => {
+    const fixture = createFixture();
+    const credentials = await bootstrapRegistryAndCredentials(fixture);
+    const server = createControlPlaneServer(fixture.control_plane.services, {
+        adminToken: 'admin-secret',
+    });
+    const baseUrl = await listen(server);
+
+    try {
+        const invalidFlow = await postJson(
+            baseUrl,
+            '/v1/auth/token',
+            {
+                client_id: credentials.client_id,
+                client_secret: credentials.client_secret,
+                service_scope: 'reg',
+                flow: 'invalid',
+            },
+        );
+
+        assert.equal(invalidFlow.status, 400);
+        assert.equal(invalidFlow.body.reason_code, 'invalid_admin_request');
+        assert.equal(
+            invalidFlow.body.message,
+            'flow must be "mint" or "refresh" when provided',
+        );
+
+        const numericFlow = await postJson(
+            baseUrl,
+            '/v1/auth/token',
+            {
+                client_id: credentials.client_id,
+                client_secret: credentials.client_secret,
+                service_scope: 'reg',
+                flow: 42,
+            },
+        );
+
+        assert.equal(numericFlow.status, 400);
+        assert.equal(numericFlow.body.reason_code, 'invalid_admin_request');
+    } finally {
+        await closeServer(server);
+    }
+});
+
 test('admin cross-service audit endpoint returns normalized events', async () => {
     const fixture = createFixture();
     const credentials = await bootstrapRegistryAndCredentials(fixture);
@@ -528,4 +617,339 @@ test('rotation completion requires adopted next secret', async () => {
     } finally {
         await closeServer(server);
     }
+});
+
+// ──────────────────────────────────────────────────
+// Stage 11 — Admin Extended Coverage
+// ──────────────────────────────────────────────────
+
+describe('Admin endpoints — extended coverage', () => {
+    describe('POST /v1/admin/tenants', () => {
+        test('creates tenant and returns 201 with '
+            + 'record', async () => {
+            const fixture = createFixture();
+            const server =
+                createControlPlaneServer(
+                    fixture.control_plane.services,
+                    { adminToken: 'admin-secret' }
+                );
+            const baseUrl = await listen(server);
+
+            try {
+                const r = await postJson(
+                    baseUrl,
+                    '/v1/admin/tenants',
+                    {
+                        tenant_id: 't1',
+                        name: 'Tenant One',
+                    },
+                    'admin-secret'
+                );
+                assert.equal(r.status, 201);
+                const tenant = r.body.tenant as
+                    Record<string, unknown>;
+                assert.equal(tenant.tenant_id, 't1');
+                assert.equal(tenant.state, 'active');
+            } finally {
+                await closeServer(server);
+            }
+        });
+
+        test('missing tenant_id returns 400',
+            async () => {
+            const fixture = createFixture();
+            const server =
+                createControlPlaneServer(
+                    fixture.control_plane.services,
+                    { adminToken: 'admin-secret' }
+                );
+            const baseUrl = await listen(server);
+
+            try {
+                const r = await postJson(
+                    baseUrl,
+                    '/v1/admin/tenants',
+                    { name: 'No ID' },
+                    'admin-secret'
+                );
+                assert.equal(r.status, 400);
+            } finally {
+                await closeServer(server);
+            }
+        });
+    });
+
+    describe('POST /v1/admin/instances', () => {
+        test('creates instance and returns 201 with '
+            + 'record', async () => {
+            const fixture = createFixture();
+            await fixture.control_plane.services
+                .registry.createTenant({
+                    tenant_id: 't1',
+                    name: 'T',
+                });
+            const server =
+                createControlPlaneServer(
+                    fixture.control_plane.services,
+                    { adminToken: 'admin-secret' }
+                );
+            const baseUrl = await listen(server);
+
+            try {
+                const r = await postJson(
+                    baseUrl,
+                    '/v1/admin/instances',
+                    {
+                        instance_id: 'i1',
+                        tenant_id: 't1',
+                        source: 'sn://dev.sn.com',
+                    },
+                    'admin-secret'
+                );
+                assert.equal(r.status, 201);
+                const inst = r.body.instance as
+                    Record<string, unknown>;
+                assert.equal(inst.instance_id, 'i1');
+            } finally {
+                await closeServer(server);
+            }
+        });
+
+        test('missing required fields returns 400',
+            async () => {
+            const fixture = createFixture();
+            const server =
+                createControlPlaneServer(
+                    fixture.control_plane.services,
+                    { adminToken: 'admin-secret' }
+                );
+            const baseUrl = await listen(server);
+
+            try {
+                const r = await postJson(
+                    baseUrl,
+                    '/v1/admin/instances',
+                    { instance_id: 'i1' },
+                    'admin-secret'
+                );
+                assert.equal(r.status, 400);
+            } finally {
+                await closeServer(server);
+            }
+        });
+    });
+
+    describe('POST /v1/admin/enrollment-codes', () => {
+        test('issues code and returns 201 with '
+            + 'code_id', async () => {
+            const fixture = createFixture();
+            await fixture.control_plane.services
+                .registry.createTenant({
+                    tenant_id: 't1',
+                    name: 'T',
+                });
+            await fixture.control_plane.services
+                .registry.createInstance({
+                    instance_id: 'i1',
+                    tenant_id: 't1',
+                    source: 'sn://dev.sn.com',
+                });
+            const server =
+                createControlPlaneServer(
+                    fixture.control_plane.services,
+                    { adminToken: 'admin-secret' }
+                );
+            const baseUrl = await listen(server);
+
+            try {
+                const r = await postJson(
+                    baseUrl,
+                    '/v1/admin/enrollment-codes',
+                    {
+                        tenant_id: 't1',
+                        instance_id: 'i1',
+                    },
+                    'admin-secret'
+                );
+                assert.equal(r.status, 201);
+                assert.ok(
+                    String(r.body.code_id)
+                        .startsWith('enr_')
+                );
+            } finally {
+                await closeServer(server);
+            }
+        });
+
+        test('missing required fields returns 400',
+            async () => {
+            const fixture = createFixture();
+            const server =
+                createControlPlaneServer(
+                    fixture.control_plane.services,
+                    { adminToken: 'admin-secret' }
+                );
+            const baseUrl = await listen(server);
+
+            try {
+                const r = await postJson(
+                    baseUrl,
+                    '/v1/admin/enrollment-codes',
+                    { tenant_id: 't1' },
+                    'admin-secret'
+                );
+                assert.equal(r.status, 400);
+            } finally {
+                await closeServer(server);
+            }
+        });
+    });
+
+    describe('POST /v1/admin/instances/{id}/services',
+        () => {
+        test('updates services and returns 200',
+            async () => {
+            const fixture = createFixture();
+            await fixture.control_plane.services
+                .registry.createTenant({
+                    tenant_id: 't1',
+                    name: 'T',
+                });
+            await fixture.control_plane.services
+                .registry.createInstance({
+                    instance_id: 'i1',
+                    tenant_id: 't1',
+                    source: 'sn://dev.sn.com',
+                });
+            const server =
+                createControlPlaneServer(
+                    fixture.control_plane.services,
+                    { adminToken: 'admin-secret' }
+                );
+            const baseUrl = await listen(server);
+
+            try {
+                const r = await postJson(
+                    baseUrl,
+                    '/v1/admin/instances/i1/services',
+                    { allowed_services: ['reg'] },
+                    'admin-secret'
+                );
+                assert.equal(r.status, 200);
+                const inst = r.body.instance as
+                    Record<string, unknown>;
+                assert.deepStrictEqual(
+                    inst.allowed_services,
+                    ['reg']
+                );
+            } finally {
+                await closeServer(server);
+            }
+        });
+    });
+
+    describe('POST /v1/admin/tenants/{id}/state', () => {
+        test('updates tenant state and returns 200',
+            async () => {
+            const fixture = createFixture();
+            await fixture.control_plane.services
+                .registry.createTenant({
+                    tenant_id: 't1',
+                    name: 'T',
+                });
+            const server =
+                createControlPlaneServer(
+                    fixture.control_plane.services,
+                    { adminToken: 'admin-secret' }
+                );
+            const baseUrl = await listen(server);
+
+            try {
+                const r = await postJson(
+                    baseUrl,
+                    '/v1/admin/tenants/t1/state',
+                    { state: 'suspended' },
+                    'admin-secret'
+                );
+                assert.equal(r.status, 200);
+                const tenant = r.body.tenant as
+                    Record<string, unknown>;
+                assert.equal(
+                    tenant.state,
+                    'suspended'
+                );
+            } finally {
+                await closeServer(server);
+            }
+        });
+    });
+
+    describe('POST /v1/admin/tenants/{id}/'
+        + 'entitlement-state', () => {
+        test('updates entitlement and returns 200',
+            async () => {
+            const fixture = createFixture();
+            await fixture.control_plane.services
+                .registry.createTenant({
+                    tenant_id: 't1',
+                    name: 'T',
+                });
+            const server =
+                createControlPlaneServer(
+                    fixture.control_plane.services,
+                    { adminToken: 'admin-secret' }
+                );
+            const baseUrl = await listen(server);
+
+            try {
+                const r = await postJson(
+                    baseUrl,
+                    '/v1/admin/tenants/t1/'
+                        + 'entitlement-state',
+                    { entitlement_state: 'disabled' },
+                    'admin-secret'
+                );
+                assert.equal(r.status, 200);
+                const tenant = r.body.tenant as
+                    Record<string, unknown>;
+                assert.equal(
+                    tenant.entitlement_state,
+                    'disabled'
+                );
+            } finally {
+                await closeServer(server);
+            }
+        });
+    });
+
+    describe('GET /v1/admin/degraded-mode', () => {
+        test('returns current outage state and '
+            + 'counters', async () => {
+            const fixture = createFixture();
+            const server =
+                createControlPlaneServer(
+                    fixture.control_plane.services,
+                    { adminToken: 'admin-secret' }
+                );
+            const baseUrl = await listen(server);
+
+            try {
+                const r = await getJson(
+                    baseUrl,
+                    '/v1/admin/degraded-mode',
+                    'admin-secret'
+                );
+                assert.equal(r.status, 200);
+                assert.equal(
+                    r.body.outage_active,
+                    false
+                );
+                assert.ok(
+                    r.body.degraded_mode_counters
+                );
+            } finally {
+                await closeServer(server);
+            }
+        });
+    });
 });

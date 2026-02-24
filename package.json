@@ -13,7 +13,7 @@
         "migrate:persistence": "node dist/persistence/migrate.js",
         "start": "node dist/index.js",
         "start:dev": "ts-node src/index.ts",
-        "test": "npm run build && node --test dist/audit/audit.service.test.js dist/token/token.service.test.js dist/enrollment/enrollment.integration.test.js dist/rotation/rotation.integration.test.js dist/failure-modes.test.js dist/server.admin.integration.test.js dist/startup.security.test.js dist/durability.integration.test.js"
+        "test": "npm run build && node --test dist/utils/crypto.test.js dist/utils/clock.test.js dist/constants.test.js dist/persistence/types.test.js dist/persistence/in-memory-state-store.test.js dist/registry/registry.service.test.js dist/audit/audit.service.test.js dist/token/token.service.test.js dist/enrollment/enrollment.integration.test.js dist/rotation/rotation.integration.test.js dist/failure-modes.test.js dist/server.test.js dist/server.admin.integration.test.js dist/startup.security.test.js dist/durability.integration.test.js dist/index.test.js dist/test-helpers.test.js"
     },
     "dependencies": {
         "@rezilient/types": "file:../rezilient-types",

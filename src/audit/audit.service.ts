@@ -30,6 +30,14 @@ const SENSITIVE_KEY_SNIPPETS = [
     'token',
 ];
 
+const SAFE_METADATA_KEYS = new Set([
+    'secret_version_id',
+    'next_secret_version_id',
+    'old_secret_version_id',
+    'new_secret_version_id',
+    'current_secret_version_id',
+]);
+
 function sanitizeMetadataValue(value: unknown): unknown {
     if (Array.isArray(value)) {
         return value.map((entry) => sanitizeMetadataValue(entry));
@@ -40,6 +48,11 @@ function sanitizeMetadataValue(value: unknown): unknown {
         const sanitized: Record<string, unknown> = {};
 
         for (const [key, nestedValue] of Object.entries(objectValue)) {
+            if (SAFE_METADATA_KEYS.has(key)) {
+                sanitized[key] = sanitizeMetadataValue(nestedValue);
+                continue;
+            }
+
             const loweredKey = key.toLowerCase();
             const isSensitive = SENSITIVE_KEY_SNIPPETS.some((snippet) =>
                 loweredKey.includes(snippet),

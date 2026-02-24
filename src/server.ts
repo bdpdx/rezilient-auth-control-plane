@@ -65,6 +65,10 @@ async function readJsonBody(
 
     const parsed = JSON.parse(body) as unknown;
 
+    if (Array.isArray(parsed)) {
+        throw new Error('request body must be an object, not an array');
+    }
+
     if (!parsed || typeof parsed !== 'object') {
         throw new Error('request body must be an object');
     }
@@ -113,6 +117,20 @@ function asPositiveInteger(value: unknown, fieldName: string): number {
 function asBoolean(value: unknown, fieldName: string): boolean {
     if (typeof value !== 'boolean') {
         throw new Error(`${fieldName} must be a boolean`);
+    }
+
+    return value;
+}
+
+function asOptionalFlow(
+    value: unknown,
+): 'mint' | 'refresh' | undefined {
+    if (value === undefined) {
+        return undefined;
+    }
+
+    if (value !== 'mint' && value !== 'refresh') {
+        throw new Error('flow must be "mint" or "refresh" when provided');
     }
 
     return value;
@@ -374,12 +392,39 @@ function summarizeInstances(instances: InstanceRecord[]): Record<string, number>
     };
 }
 
+function stripSecretHashes(
+    credentials: NonNullable<InstanceRecord['client_credentials']>,
+): Record<string, unknown> {
+    return {
+        client_id: credentials.client_id,
+        current_secret_version_id: credentials.current_secret_version_id,
+        next_secret_version_id: credentials.next_secret_version_id,
+        secret_versions: credentials.secret_versions.map((sv) => ({
+            version_id: sv.version_id,
+            created_at: sv.created_at,
+            adopted_at: sv.adopted_at,
+            revoked_at: sv.revoked_at,
+            valid_until: sv.valid_until,
+        })),
+    };
+}
+
 function buildInstanceAdminRecord(instance: InstanceRecord): Record<string, unknown> {
     const credentials = instance.client_credentials;
+    const baseRecord: Record<string, unknown> = {
+        instance_id: instance.instance_id,
+        tenant_id: instance.tenant_id,
+        source: instance.source,
+        state: instance.state,
+        allowed_services: instance.allowed_services,
+        created_at: instance.created_at,
+        updated_at: instance.updated_at,
+    };
 
     if (!credentials) {
         return {
-            ...instance,
+            ...baseRecord,
+            client_credentials: undefined,
             enrollment_state: 'not_enrolled',
             rotation_state: 'not_enrolled',
             secret_summary: {
@@ -409,7 +454,8 @@ function buildInstanceAdminRecord(instance: InstanceRecord): Record<string, unkn
         : 'stable';
 
     return {
-        ...instance,
+        ...baseRecord,
+        client_credentials: stripSecretHashes(credentials),
         enrollment_state: 'enrolled',
         rotation_state: rotationState,
         secret_summary: {
@@ -720,7 +766,7 @@ export function createControlPlaneServer(
             if (pathname === '/v1/auth/token') {
                 const result = await services.token.mintToken({
                     grant_type: asOptionalString(body.grant_type),
-                    flow: body.flow as 'mint' | 'refresh' | undefined,
+                    flow: asOptionalFlow(body.flow),
                     client_id: asString(body.client_id, 'client_id'),
                     client_secret: asString(body.client_secret, 'client_secret'),
                     service_scope: asString(body.service_scope, 'service_scope'),

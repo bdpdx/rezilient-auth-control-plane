@@ -351,6 +351,25 @@ export class TokenService {
                 };
             }
 
+            if (claims.iss !== this.config.issuer) {
+                await this.audit.record({
+                    event_type: 'token_validate_denied',
+                    deny_reason_code: 'denied_token_malformed',
+                    tenant_id: claims.tenant_id,
+                    instance_id: claims.instance_id,
+                    client_id: claims.sub,
+                    service_scope: claims.service_scope,
+                    metadata: {
+                        expected_issuer: this.config.issuer,
+                    },
+                });
+
+                return {
+                    success: false,
+                    reason_code: 'denied_token_malformed',
+                };
+            }
+
             const nowSeconds = Math.floor(this.clock.now().getTime() / 1000);
 
             if (nowSeconds > (claims.exp + this.config.token_clock_skew_seconds)) {
