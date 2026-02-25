@@ -22,6 +22,8 @@
 - `registry/types.ts`: tenant/instance/credential domain models.
 - `registry/registry.service.ts`: registry lifecycle operations.
 - `enrollment/enrollment.service.ts`: enrollment code issue/exchange flow.
+- `onboarding/onboarding.service.ts`: onboarding launch analytics and
+  register-interest intake flow.
 - `rotation/rotation.service.ts`: secret rotation/revoke lifecycle.
 - `token/token.service.ts`: client-credential mint/validation/failure policies.
 - `token/token.service.test.ts`: mint/deny matrix unit tests.

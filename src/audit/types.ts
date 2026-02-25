@@ -13,6 +13,8 @@ export const AUTH_AUDIT_EVENT_TYPES = [
     'instance_services_updated',
     'enrollment_code_issued',
     'enrollment_code_exchanged',
+    'instance_launch_reported',
+    'instance_interest_registered',
     'token_minted',
     'token_refreshed',
     'token_mint_denied',

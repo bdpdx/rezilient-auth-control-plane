@@ -126,6 +126,243 @@ describe('Control Plane Server — public endpoints',
         });
     });
 
+    describe('POST /v1/analytics/instance-launch', () => {
+        test('records launch telemetry once per idempotency key',
+            async () => {
+            const fixture = createFixture();
+            const server =
+                createControlPlaneServer(
+                    fixture.control_plane.services
+                );
+            const baseUrl = await listen(server);
+
+            try {
+                const first = await postJson(
+                    baseUrl,
+                    '/v1/analytics/instance-launch',
+                    {
+                        instance_id: 'instance-dev-01',
+                        source:
+                            'sn://acme-dev.service-now.com',
+                        idempotency_key:
+                            'launch-instance-dev-01',
+                        app_version: '1.2.3',
+                    }
+                );
+                assert.equal(first.status, 200);
+                assert.equal(first.body.status, 'recorded');
+                assert.ok(first.body.reference_id);
+
+                const second = await postJson(
+                    baseUrl,
+                    '/v1/analytics/instance-launch',
+                    {
+                        instance_id: 'instance-dev-01',
+                        source:
+                            'sn://acme-dev.service-now.com',
+                        idempotency_key:
+                            'launch-instance-dev-01',
+                    }
+                );
+                assert.equal(second.status, 200);
+                assert.equal(second.body.status, 'duplicate');
+                assert.equal(
+                    second.body.reference_id,
+                    first.body.reference_id
+                );
+
+                const auditEvents =
+                    await fixture.control_plane
+                        .services.audit.list();
+                const launchEvents = auditEvents.filter(
+                    (event) =>
+                        event.event_type ===
+                        'instance_launch_reported'
+                );
+                assert.equal(launchEvents.length, 1);
+            } finally {
+                await closeServer(server);
+            }
+        });
+
+        test('supports idempotency key via request header',
+            async () => {
+            const fixture = createFixture();
+            const server =
+                createControlPlaneServer(
+                    fixture.control_plane.services
+                );
+            const baseUrl = await listen(server);
+
+            try {
+                const response = await fetch(
+                    `${baseUrl}/v1/analytics/instance-launch`,
+                    {
+                        method: 'POST',
+                        headers: {
+                            'content-type':
+                                'application/json',
+                            'x-rez-idempotency-key':
+                                'launch-header-key-1',
+                        },
+                        body: JSON.stringify({
+                            instance_id:
+                                'instance-dev-02',
+                            source:
+                                'sn://acme-dev.service-now.com',
+                        }),
+                    }
+                );
+                const payload = await response.json() as
+                    Record<string, unknown>;
+                assert.equal(response.status, 200);
+                assert.equal(payload.status, 'recorded');
+
+                const retry = await fetch(
+                    `${baseUrl}/v1/analytics/instance-launch`,
+                    {
+                        method: 'POST',
+                        headers: {
+                            'content-type':
+                                'application/json',
+                            'x-rez-idempotency-key':
+                                'launch-header-key-1',
+                        },
+                        body: JSON.stringify({
+                            instance_id:
+                                'instance-dev-02',
+                            source:
+                                'sn://acme-dev.service-now.com',
+                        }),
+                    }
+                );
+                const retryPayload = await retry.json() as
+                    Record<string, unknown>;
+                assert.equal(retry.status, 200);
+                assert.equal(retryPayload.status, 'duplicate');
+                assert.equal(
+                    retryPayload.reference_id,
+                    payload.reference_id
+                );
+            } finally {
+                await closeServer(server);
+            }
+        });
+
+        test('returns 400 when required fields are missing',
+            async () => {
+            const fixture = createFixture();
+            const server =
+                createControlPlaneServer(
+                    fixture.control_plane.services
+                );
+            const baseUrl = await listen(server);
+
+            try {
+                const response = await postJson(
+                    baseUrl,
+                    '/v1/analytics/instance-launch',
+                    {
+                        source:
+                            'sn://acme-dev.service-now.com',
+                    }
+                );
+                assert.equal(response.status, 400);
+                assert.equal(
+                    response.body.reason_code,
+                    'invalid_admin_request'
+                );
+            } finally {
+                await closeServer(server);
+            }
+        });
+    });
+
+    describe('POST /v1/onboarding/register-interest', () => {
+        test('returns acknowledgement with reference and sales contact',
+            async () => {
+            const fixture = createFixture();
+            const server =
+                createControlPlaneServer(
+                    fixture.control_plane.services
+                );
+            const baseUrl = await listen(server);
+
+            try {
+                const response = await postJson(
+                    baseUrl,
+                    '/v1/onboarding/register-interest',
+                    {
+                        source:
+                            'sn://prospect.service-now.com',
+                        organization_name:
+                            'Prospect Org',
+                        contact_name:
+                            'Pat Example',
+                        contact_email:
+                            'pat@example.com',
+                        notes:
+                            'Interested in enterprise plan.',
+                    }
+                );
+                assert.equal(response.status, 201);
+                assert.equal(response.body.status, 'received');
+                assert.ok(response.body.reference_id);
+
+                const salesContact =
+                    response.body.sales_contact as
+                    Record<string, unknown>;
+                assert.equal(
+                    salesContact.email,
+                    'sales@rezilient.co'
+                );
+                assert.ok(salesContact.message);
+
+                const auditEvents =
+                    await fixture.control_plane
+                        .services.audit.list();
+                const interestEvents = auditEvents.filter(
+                    (event) =>
+                        event.event_type ===
+                        'instance_interest_registered'
+                );
+                assert.equal(interestEvents.length, 1);
+            } finally {
+                await closeServer(server);
+            }
+        });
+
+        test('returns 400 when required fields are missing',
+            async () => {
+            const fixture = createFixture();
+            const server =
+                createControlPlaneServer(
+                    fixture.control_plane.services
+                );
+            const baseUrl = await listen(server);
+
+            try {
+                const response = await postJson(
+                    baseUrl,
+                    '/v1/onboarding/register-interest',
+                    {
+                        source:
+                            'sn://prospect.service-now.com',
+                        contact_name:
+                            'Pat Example',
+                    }
+                );
+                assert.equal(response.status, 400);
+                assert.equal(
+                    response.body.reason_code,
+                    'invalid_admin_request'
+                );
+            } finally {
+                await closeServer(server);
+            }
+        });
+    });
+
     describe('POST /v1/auth/enroll/exchange', () => {
         test('successful exchange returns client_id '
             + 'and client_secret', async () => {

@@ -1,6 +1,7 @@
 import { createControlPlaneServer, ControlPlaneServices } from './server';
 import { AuditService } from './audit/audit.service';
 import { EnrollmentService } from './enrollment/enrollment.service';
+import { OnboardingService } from './onboarding/onboarding.service';
 import { InMemoryControlPlaneStateStore } from './persistence/in-memory-state-store';
 import { PostgresControlPlaneStateStore } from './persistence/postgres-state-store';
 import { ControlPlaneStateStore } from './persistence/state-store';
@@ -203,6 +204,10 @@ function buildControlPlane(
         runtimeClock,
         stateStore,
     );
+    const onboarding = new OnboardingService(
+        audit,
+        stateStore,
+    );
     const rotation = new RotationService(registry, audit, runtimeClock);
     const token = new TokenService(
         registry,
@@ -217,6 +222,7 @@ function buildControlPlane(
         services: {
             registry,
             enrollment,
+            onboarding,
             rotation,
             token,
             audit,
@@ -295,6 +301,7 @@ if (require.main === module) {
 export {
     AuditService,
     EnrollmentService,
+    OnboardingService,
     RegistryService,
     RotationService,
     TokenService,

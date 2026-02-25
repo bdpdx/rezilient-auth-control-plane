@@ -8,6 +8,7 @@ import { URL } from 'node:url';
 import { ServiceScope } from './constants';
 import { AuditService } from './audit/audit.service';
 import { EnrollmentService } from './enrollment/enrollment.service';
+import { OnboardingService } from './onboarding/onboarding.service';
 import { RegistryService } from './registry/registry.service';
 import { InstanceRecord, TenantRecord } from './registry/types';
 import { RotationService } from './rotation/rotation.service';
@@ -16,6 +17,7 @@ import { TokenService } from './token/token.service';
 export interface ControlPlaneServices {
     registry: RegistryService;
     enrollment: EnrollmentService;
+    onboarding: OnboardingService;
     rotation: RotationService;
     token: TokenService;
     audit: AuditService;
@@ -104,6 +106,21 @@ function asOptionalString(value: unknown): string | undefined {
     }
 
     return value;
+}
+
+function asOptionalObject(
+    value: unknown,
+    fieldName: string,
+): Record<string, unknown> | undefined {
+    if (value === undefined) {
+        return undefined;
+    }
+
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error(`${fieldName} must be an object when provided`);
+    }
+
+    return value as Record<string, unknown>;
 }
 
 function asPositiveInteger(value: unknown, fieldName: string): number {
@@ -701,6 +718,55 @@ export function createControlPlaneServer(
             }
 
             const body = await readJsonBody(request, maxJsonBodyBytes);
+
+            if (pathname === '/v1/analytics/instance-launch') {
+                const headerIdempotencyKey = request.headers[
+                    'x-rez-idempotency-key'
+                ];
+                const idempotencyKey = typeof headerIdempotencyKey === 'string'
+                    ? headerIdempotencyKey
+                    : asOptionalString(body.idempotency_key);
+                const result = await services.onboarding.reportInstanceLaunch({
+                    instance_id: asString(body.instance_id, 'instance_id'),
+                    source: asString(body.source, 'source'),
+                    tenant_id: asOptionalString(body.tenant_id),
+                    idempotency_key: idempotencyKey,
+                    app_version: asOptionalString(body.app_version),
+                    environment: asOptionalString(body.environment),
+                    metadata: asOptionalObject(body.metadata, 'metadata'),
+                });
+
+                sendJson(response, 200, result as unknown as Record<string, unknown>);
+
+                return;
+            }
+
+            if (pathname === '/v1/onboarding/register-interest') {
+                const result = await services.onboarding
+                    .registerInstanceInterest({
+                        source: asString(body.source, 'source'),
+                        organization_name: asString(
+                            body.organization_name,
+                            'organization_name',
+                        ),
+                        contact_name: asString(
+                            body.contact_name,
+                            'contact_name',
+                        ),
+                        contact_email: asString(
+                            body.contact_email,
+                            'contact_email',
+                        ),
+                        contact_phone: asOptionalString(body.contact_phone),
+                        notes: asOptionalString(body.notes),
+                        requested_by: asOptionalString(body.requested_by),
+                        metadata: asOptionalObject(body.metadata, 'metadata'),
+                    });
+
+                sendJson(response, 201, result as unknown as Record<string, unknown>);
+
+                return;
+            }
 
             if (pathname === '/v1/admin/tenants') {
                 const tenant = await services.registry.createTenant({
