@@ -90,6 +90,23 @@ async function postJson(
     return postRaw(baseUrl, path, JSON.stringify(body), headers);
 }
 
+async function postInternalJson(
+    baseUrl: string,
+    path: string,
+    body: Record<string, unknown>,
+    internalToken?: string,
+): Promise<ResponseData> {
+    const headers: Record<string, string> = {
+        'content-type': 'application/json',
+    };
+
+    if (internalToken) {
+        headers['x-rezilient-internal-token'] = internalToken;
+    }
+
+    return postRaw(baseUrl, path, JSON.stringify(body), headers);
+}
+
 test('admin endpoints require token when configured', async () => {
     const fixture = createFixture();
     const server = createControlPlaneServer(fixture.control_plane.services, {
@@ -120,6 +137,269 @@ test('admin endpoints require token when configured', async () => {
             authorized.body.outage_active,
             false,
         );
+    } finally {
+        await closeServer(server);
+    }
+});
+
+test('internal endpoints require token when configured', async () => {
+    const fixture = createFixture();
+    await fixture.control_plane.services.registry.createTenant({
+        tenant_id: 'tenant-acme',
+        name: 'Acme',
+    });
+    await fixture.control_plane.services.registry.createInstance({
+        instance_id: 'instance-acme-01',
+        tenant_id: 'tenant-acme',
+        source: 'sn://acme-dev.service-now.com',
+    });
+    const server = createControlPlaneServer(fixture.control_plane.services, {
+        adminToken: 'admin-secret',
+        internalToken: 'internal-secret',
+    });
+    const baseUrl = await listen(server);
+
+    try {
+        const missingToken = await postInternalJson(
+            baseUrl,
+            '/v1/internal/source-mapping/resolve',
+            {
+                tenant_id: 'tenant-acme',
+                instance_id: 'instance-acme-01',
+            },
+        );
+        assert.equal(missingToken.status, 403);
+        assert.equal(
+            missingToken.body.reason_code,
+            'internal_auth_required',
+        );
+
+        const wrongToken = await postInternalJson(
+            baseUrl,
+            '/v1/internal/source-mapping/resolve',
+            {
+                tenant_id: 'tenant-acme',
+                instance_id: 'instance-acme-01',
+            },
+            'wrong-secret',
+        );
+        assert.equal(wrongToken.status, 403);
+        assert.equal(
+            wrongToken.body.reason_code,
+            'internal_auth_required',
+        );
+
+        const authorized = await postInternalJson(
+            baseUrl,
+            '/v1/internal/source-mapping/resolve',
+            {
+                tenant_id: 'tenant-acme',
+                instance_id: 'instance-acme-01',
+            },
+            'internal-secret',
+        );
+        assert.equal(authorized.status, 200);
+        assert.equal(authorized.body.ok, true);
+        assert.equal(authorized.body.tenant_id, 'tenant-acme');
+        assert.equal(authorized.body.instance_id, 'instance-acme-01');
+        assert.equal(authorized.body.requested_service_scope, 'rrs');
+        assert.equal(authorized.body.service_allowed, true);
+    } finally {
+        await closeServer(server);
+    }
+});
+
+test('internal resolve returns not_found when mapping is missing', async () => {
+    const fixture = createFixture();
+    const server = createControlPlaneServer(fixture.control_plane.services, {
+        internalToken: 'internal-secret',
+    });
+    const baseUrl = await listen(server);
+
+    try {
+        const response = await postInternalJson(
+            baseUrl,
+            '/v1/internal/source-mapping/resolve',
+            {
+                tenant_id: 'tenant-missing',
+                instance_id: 'instance-missing',
+            },
+            'internal-secret',
+        );
+
+        assert.equal(response.status, 404);
+        assert.equal(response.body.error, 'not_found');
+        assert.equal(
+            response.body.reason_code,
+            'tenant_instance_mapping_not_found',
+        );
+    } finally {
+        await closeServer(server);
+    }
+});
+
+test('internal resolve reports service not allowed for requested scope', async () => {
+    const fixture = createFixture();
+    await fixture.control_plane.services.registry.createTenant({
+        tenant_id: 'tenant-reg-only',
+        name: 'Tenant Reg Only',
+    });
+    await fixture.control_plane.services.registry.createInstance({
+        instance_id: 'instance-reg-only',
+        tenant_id: 'tenant-reg-only',
+        source: 'sn://reg-only.service-now.com',
+        allowed_services: ['reg'],
+    });
+    const server = createControlPlaneServer(fixture.control_plane.services, {
+        internalToken: 'internal-secret',
+    });
+    const baseUrl = await listen(server);
+
+    try {
+        const response = await postInternalJson(
+            baseUrl,
+            '/v1/internal/source-mapping/resolve',
+            {
+                tenant_id: 'tenant-reg-only',
+                instance_id: 'instance-reg-only',
+                service_scope: 'rrs',
+            },
+            'internal-secret',
+        );
+
+        assert.equal(response.status, 200);
+        assert.equal(response.body.ok, true);
+        assert.equal(response.body.service_allowed, false);
+        assert.deepEqual(response.body.allowed_services, ['reg']);
+    } finally {
+        await closeServer(server);
+    }
+});
+
+test('internal resolve includes inactive tenant and instance states', async () => {
+    const fixture = createFixture();
+    await fixture.control_plane.services.registry.createTenant({
+        tenant_id: 'tenant-suspended',
+        name: 'Tenant Suspended',
+        state: 'suspended',
+        entitlement_state: 'disabled',
+    });
+    await fixture.control_plane.services.registry.createInstance({
+        instance_id: 'instance-suspended',
+        tenant_id: 'tenant-suspended',
+        source: 'sn://suspended.service-now.com',
+        state: 'suspended',
+    });
+    const server = createControlPlaneServer(fixture.control_plane.services, {
+        internalToken: 'internal-secret',
+    });
+    const baseUrl = await listen(server);
+
+    try {
+        const response = await postInternalJson(
+            baseUrl,
+            '/v1/internal/source-mapping/resolve',
+            {
+                tenant_id: 'tenant-suspended',
+                instance_id: 'instance-suspended',
+                service_scope: 'rrs',
+            },
+            'internal-secret',
+        );
+
+        assert.equal(response.status, 200);
+        assert.equal(response.body.ok, true);
+        assert.equal(response.body.tenant_state, 'suspended');
+        assert.equal(response.body.entitlement_state, 'disabled');
+        assert.equal(response.body.instance_state, 'suspended');
+        assert.equal(response.body.service_allowed, true);
+    } finally {
+        await closeServer(server);
+    }
+});
+
+test('internal list returns canonical mappings and applies filters', async () => {
+    const fixture = createFixture();
+    await fixture.control_plane.services.registry.createTenant({
+        tenant_id: 'tenant-active',
+        name: 'Tenant Active',
+    });
+    await fixture.control_plane.services.registry.createInstance({
+        instance_id: 'instance-active',
+        tenant_id: 'tenant-active',
+        source: 'sn://active.service-now.com',
+    });
+    await fixture.control_plane.services.registry.createTenant({
+        tenant_id: 'tenant-inactive',
+        name: 'Tenant Inactive',
+        state: 'suspended',
+    });
+    await fixture.control_plane.services.registry.createInstance({
+        instance_id: 'instance-inactive',
+        tenant_id: 'tenant-inactive',
+        source: 'sn://inactive.service-now.com',
+        state: 'suspended',
+    });
+    await fixture.control_plane.services.registry.createTenant({
+        tenant_id: 'tenant-reg-only',
+        name: 'Tenant Reg Only',
+    });
+    await fixture.control_plane.services.registry.createInstance({
+        instance_id: 'instance-reg-only',
+        tenant_id: 'tenant-reg-only',
+        source: 'sn://reg-only-list.service-now.com',
+        allowed_services: ['reg'],
+    });
+    const server = createControlPlaneServer(fixture.control_plane.services, {
+        internalToken: 'internal-secret',
+    });
+    const baseUrl = await listen(server);
+
+    try {
+        const allMappings = await postInternalJson(
+            baseUrl,
+            '/v1/internal/source-mappings/list',
+            {},
+            'internal-secret',
+        );
+        assert.equal(allMappings.status, 200);
+        assert.equal(allMappings.body.ok, true);
+        const allRecords = allMappings.body.source_mappings as Array<
+            Record<string, unknown>
+        >;
+        assert.equal(allRecords.length, 3);
+
+        const filtered = await postInternalJson(
+            baseUrl,
+            '/v1/internal/source-mappings/list',
+            {
+                service_scope: 'rrs',
+                instance_state: 'active',
+            },
+            'internal-secret',
+        );
+        assert.equal(filtered.status, 200);
+        const filteredRecords = filtered.body.source_mappings as Array<
+            Record<string, unknown>
+        >;
+        assert.equal(filteredRecords.length, 1);
+        assert.equal(filteredRecords[0].instance_id, 'instance-active');
+
+        const inactiveOnly = await postInternalJson(
+            baseUrl,
+            '/v1/internal/source-mappings/list',
+            {
+                tenant_state: 'suspended',
+            },
+            'internal-secret',
+        );
+        assert.equal(inactiveOnly.status, 200);
+        const inactiveRecords = inactiveOnly.body.source_mappings as Array<
+            Record<string, unknown>
+        >;
+        assert.equal(inactiveRecords.length, 1);
+        assert.equal(inactiveRecords[0].instance_id, 'instance-inactive');
+        assert.equal(inactiveRecords[0].tenant_state, 'suspended');
     } finally {
         await closeServer(server);
     }

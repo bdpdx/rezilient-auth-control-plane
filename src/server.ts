@@ -5,7 +5,14 @@ import {
     ServerResponse,
 } from 'node:http';
 import { URL } from 'node:url';
-import { ServiceScope } from './constants';
+import {
+    ENTITLEMENT_STATES,
+    INSTANCE_STATES,
+    isServiceScope,
+    SERVICE_SCOPES,
+    TENANT_STATES,
+    ServiceScope,
+} from './constants';
 import { AuditService } from './audit/audit.service';
 import { EnrollmentService } from './enrollment/enrollment.service';
 import { OnboardingService } from './onboarding/onboarding.service';
@@ -26,6 +33,8 @@ export interface ControlPlaneServices {
 export interface ControlPlaneServerOptions {
     adminApiEnabled?: boolean;
     adminToken?: string;
+    internalApiEnabled?: boolean;
+    internalToken?: string;
     maxJsonBodyBytes?: number;
 }
 
@@ -169,6 +178,66 @@ function asStringArray(value: unknown, fieldName: string): string[] {
     }
 
     return result;
+}
+
+function asOptionalServiceScope(
+    value: unknown,
+    fieldName: string,
+): ServiceScope | undefined {
+    const parsed = asOptionalString(value);
+
+    if (parsed === undefined) {
+        return undefined;
+    }
+
+    if (!isServiceScope(parsed)) {
+        throw new Error(
+            `${fieldName} must be one of: ${SERVICE_SCOPES.join(', ')}`,
+        );
+    }
+
+    return parsed;
+}
+
+function asOptionalStateValue<T extends string>(
+    value: unknown,
+    fieldName: string,
+    allowedValues: readonly T[],
+): T | undefined {
+    const parsed = asOptionalString(value);
+
+    if (parsed === undefined) {
+        return undefined;
+    }
+
+    if (!allowedValues.includes(parsed as T)) {
+        throw new Error(
+            `${fieldName} must be one of: ${allowedValues.join(', ')}`,
+        );
+    }
+
+    return parsed as T;
+}
+
+function asOptionalTenantState(
+    value: unknown,
+    fieldName: string,
+): TenantRecord['state'] | undefined {
+    return asOptionalStateValue(value, fieldName, TENANT_STATES);
+}
+
+function asOptionalEntitlementState(
+    value: unknown,
+    fieldName: string,
+): TenantRecord['entitlement_state'] | undefined {
+    return asOptionalStateValue(value, fieldName, ENTITLEMENT_STATES);
+}
+
+function asOptionalInstanceState(
+    value: unknown,
+    fieldName: string,
+): InstanceRecord['state'] | undefined {
+    return asOptionalStateValue(value, fieldName, INSTANCE_STATES);
 }
 
 function parseAuditEventLimit(limitParam: string | null): number | undefined {
@@ -347,6 +416,177 @@ function isAdminAuthorized(
     }
 
     return request.headers['x-rezilient-admin-token'] === options.adminToken;
+}
+
+function isInternalRequest(pathname: string): boolean {
+    return pathname.startsWith('/v1/internal/');
+}
+
+function isInternalApiEnabled(options?: ControlPlaneServerOptions): boolean {
+    if (options?.internalApiEnabled === undefined) {
+        return true;
+    }
+
+    return options.internalApiEnabled;
+}
+
+function normalizeHeaderValue(
+    value: string | string[] | undefined,
+): string | undefined {
+    if (typeof value === 'string') {
+        return value;
+    }
+
+    if (Array.isArray(value) && value.length > 0) {
+        return value[0];
+    }
+
+    return undefined;
+}
+
+function isInternalAuthorized(
+    request: IncomingMessage,
+    options?: ControlPlaneServerOptions,
+): boolean {
+    if (!options?.internalToken) {
+        return false;
+    }
+
+    const headerToken = normalizeHeaderValue(
+        request.headers['x-rezilient-internal-token'],
+    );
+    const authorizationHeader = normalizeHeaderValue(
+        request.headers.authorization,
+    );
+    const bearerPrefix = 'bearer ';
+    const bearerToken = authorizationHeader &&
+        authorizationHeader.toLowerCase().startsWith(bearerPrefix)
+        ? authorizationHeader.slice(bearerPrefix.length).trim()
+        : undefined;
+
+    return headerToken === options.internalToken ||
+        bearerToken === options.internalToken;
+}
+
+interface InternalSourceMappingRecord {
+    tenant_id: string;
+    instance_id: string;
+    source: string;
+    tenant_state: TenantRecord['state'];
+    entitlement_state: TenantRecord['entitlement_state'];
+    instance_state: InstanceRecord['state'];
+    allowed_services: ServiceScope[];
+    updated_at: string;
+}
+
+interface InternalSourceMappingFilters {
+    tenant_id?: string;
+    instance_id?: string;
+    service_scope?: ServiceScope;
+    tenant_state?: TenantRecord['state'];
+    entitlement_state?: TenantRecord['entitlement_state'];
+    instance_state?: InstanceRecord['state'];
+}
+
+function buildInternalSourceMappingRecord(
+    tenant: TenantRecord,
+    instance: InstanceRecord,
+): InternalSourceMappingRecord {
+    const updatedAt = tenant.updated_at > instance.updated_at
+        ? tenant.updated_at
+        : instance.updated_at;
+
+    return {
+        tenant_id: tenant.tenant_id,
+        instance_id: instance.instance_id,
+        source: instance.source,
+        tenant_state: tenant.state,
+        entitlement_state: tenant.entitlement_state,
+        instance_state: instance.state,
+        allowed_services: [...instance.allowed_services],
+        updated_at: updatedAt,
+    };
+}
+
+async function resolveInternalSourceMapping(
+    services: ControlPlaneServices,
+    tenantId: string,
+    instanceId: string,
+): Promise<InternalSourceMappingRecord> {
+    const instance = await services.registry.getInstance(instanceId);
+    const tenant = await services.registry.getTenant(tenantId);
+
+    if (!instance || !tenant || instance.tenant_id !== tenantId) {
+        throw new Error('tenant/instance mapping not found');
+    }
+
+    return buildInternalSourceMappingRecord(tenant, instance);
+}
+
+async function listInternalSourceMappings(
+    services: ControlPlaneServices,
+    filters: InternalSourceMappingFilters,
+): Promise<InternalSourceMappingRecord[]> {
+    const tenants = await services.registry.listTenants();
+    const tenantById = new Map<string, TenantRecord>(
+        tenants.map((tenant) => [tenant.tenant_id, tenant]),
+    );
+    const instances = await services.registry.listInstances();
+    const mappings: InternalSourceMappingRecord[] = [];
+
+    for (const instance of instances) {
+        if (
+            filters.instance_id !== undefined &&
+            instance.instance_id !== filters.instance_id
+        ) {
+            continue;
+        }
+
+        if (
+            filters.tenant_id !== undefined &&
+            instance.tenant_id !== filters.tenant_id
+        ) {
+            continue;
+        }
+
+        if (
+            filters.service_scope !== undefined &&
+            !instance.allowed_services.includes(filters.service_scope)
+        ) {
+            continue;
+        }
+
+        if (
+            filters.instance_state !== undefined &&
+            instance.state !== filters.instance_state
+        ) {
+            continue;
+        }
+
+        const tenant = tenantById.get(instance.tenant_id);
+
+        if (!tenant) {
+            continue;
+        }
+
+        if (
+            filters.tenant_state !== undefined &&
+            tenant.state !== filters.tenant_state
+        ) {
+            continue;
+        }
+
+        if (
+            filters.entitlement_state !== undefined &&
+            tenant.entitlement_state !== filters.entitlement_state
+        ) {
+            continue;
+        }
+
+        mappings.push(buildInternalSourceMappingRecord(tenant, instance));
+    }
+
+    return mappings;
 }
 
 function summarizeTenants(tenants: TenantRecord[]): Record<string, number> {
@@ -611,6 +851,23 @@ export function createControlPlaneServer(
                 return;
             }
 
+            if (isInternalRequest(pathname) && !isInternalApiEnabled(options)) {
+                sendJson(response, 404, {
+                    error: 'not_found',
+                });
+
+                return;
+            }
+
+            if (isInternalRequest(pathname) && !isInternalAuthorized(request, options)) {
+                sendJson(response, 403, {
+                    error: 'forbidden',
+                    reason_code: 'internal_auth_required',
+                });
+
+                return;
+            }
+
             if (method === 'GET' && pathname === '/v1/health') {
                 sendJson(response, 200, {
                     ok: true,
@@ -718,6 +975,59 @@ export function createControlPlaneServer(
             }
 
             const body = await readJsonBody(request, maxJsonBodyBytes);
+
+            if (pathname === '/v1/internal/source-mapping/resolve') {
+                const requestedServiceScope = asOptionalServiceScope(
+                    body.service_scope,
+                    'service_scope',
+                ) ?? 'rrs';
+                const mapping = await resolveInternalSourceMapping(
+                    services,
+                    asString(body.tenant_id, 'tenant_id'),
+                    asString(body.instance_id, 'instance_id'),
+                );
+
+                sendJson(response, 200, {
+                    ok: true,
+                    ...mapping,
+                    requested_service_scope: requestedServiceScope,
+                    service_allowed: mapping.allowed_services.includes(
+                        requestedServiceScope,
+                    ),
+                });
+
+                return;
+            }
+
+            if (pathname === '/v1/internal/source-mappings/list') {
+                const mappings = await listInternalSourceMappings(services, {
+                    tenant_id: asOptionalString(body.tenant_id),
+                    instance_id: asOptionalString(body.instance_id),
+                    service_scope: asOptionalServiceScope(
+                        body.service_scope,
+                        'service_scope',
+                    ),
+                    tenant_state: asOptionalTenantState(
+                        body.tenant_state,
+                        'tenant_state',
+                    ),
+                    entitlement_state: asOptionalEntitlementState(
+                        body.entitlement_state,
+                        'entitlement_state',
+                    ),
+                    instance_state: asOptionalInstanceState(
+                        body.instance_state,
+                        'instance_state',
+                    ),
+                });
+
+                sendJson(response, 200, {
+                    ok: true,
+                    source_mappings: mappings,
+                });
+
+                return;
+            }
 
             if (pathname === '/v1/analytics/instance-launch') {
                 const headerIdempotencyKey = request.headers[

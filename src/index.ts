@@ -23,6 +23,7 @@ const DEFAULT_TOKEN_CLOCK_SKEW_SECONDS = 30;
 const DEFAULT_OUTAGE_GRACE_WINDOW_SECONDS = 120;
 const DEFAULT_MAX_JSON_BODY_BYTES = 1_048_576;
 const DEFAULT_PERSISTENCE_SNAPSHOT_KEY = 'default';
+const DEFAULT_INTERNAL_API_ENABLED = true;
 const MIN_SIGNING_KEY_LENGTH = 32;
 
 function parseIntConfig(
@@ -110,6 +111,8 @@ export interface ControlPlaneRuntimeConfig {
     token_config: TokenServiceConfig;
     admin_api_enabled: boolean;
     admin_token?: string;
+    internal_api_enabled: boolean;
+    internal_token?: string;
     max_json_body_bytes: number;
     persistence_pg_url: string;
     persistence_snapshot_key: string;
@@ -151,10 +154,23 @@ export function loadControlPlaneRuntimeConfig(
         'AUTH_ENABLE_ADMIN_ENDPOINTS',
     );
     const adminToken = parseOptionalToken(env.AUTH_ADMIN_TOKEN);
+    const internalApiEnabled = parseBooleanConfig(
+        env.AUTH_ENABLE_INTERNAL_ENDPOINTS,
+        DEFAULT_INTERNAL_API_ENABLED,
+        'AUTH_ENABLE_INTERNAL_ENDPOINTS',
+    );
+    const internalToken = parseOptionalToken(env.AUTH_INTERNAL_TOKEN);
 
     if (adminApiEnabled && !adminToken) {
         throw new Error(
             'AUTH_ADMIN_TOKEN is required when AUTH_ENABLE_ADMIN_ENDPOINTS=true',
+        );
+    }
+
+    if (internalApiEnabled && !internalToken) {
+        throw new Error(
+            'AUTH_INTERNAL_TOKEN is required when '
+            + 'AUTH_ENABLE_INTERNAL_ENDPOINTS=true',
         );
     }
 
@@ -167,6 +183,8 @@ export function loadControlPlaneRuntimeConfig(
         token_config: buildTokenServiceConfigFromEnv(env),
         admin_api_enabled: adminApiEnabled,
         admin_token: adminToken,
+        internal_api_enabled: internalApiEnabled,
+        internal_token: internalToken,
         max_json_body_bytes: parseIntConfig(
             env.AUTH_MAX_JSON_BODY_BYTES,
             DEFAULT_MAX_JSON_BODY_BYTES,
@@ -278,6 +296,8 @@ if (require.main === module) {
             {
                 adminApiEnabled: runtimeConfig.admin_api_enabled,
                 adminToken: runtimeConfig.admin_token,
+                internalApiEnabled: runtimeConfig.internal_api_enabled,
+                internalToken: runtimeConfig.internal_token,
                 maxJsonBodyBytes: runtimeConfig.max_json_body_bytes,
             },
         );

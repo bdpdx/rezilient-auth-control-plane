@@ -12,6 +12,8 @@ function buildEnv(
         AUTH_SIGNING_KEY: '0123456789abcdef0123456789abcdef',
         AUTH_ENABLE_ADMIN_ENDPOINTS: 'true',
         AUTH_ADMIN_TOKEN: 'admin-token-0123456789abcdef',
+        AUTH_ENABLE_INTERNAL_ENDPOINTS: 'true',
+        AUTH_INTERNAL_TOKEN: 'internal-token-0123456789abcdef',
         AUTH_PERSISTENCE_PG_URL: 'postgres://local:local@127.0.0.1:5432/rez_auth_control_plane',
         ...overrides,
     };
@@ -41,6 +43,24 @@ test('startup config allows omitted AUTH_ADMIN_TOKEN when admin API is disabled'
 
     assert.equal(config.admin_api_enabled, false);
     assert.equal(config.admin_token, undefined);
+});
+
+test('startup config fails when internal API is enabled without AUTH_INTERNAL_TOKEN', () => {
+    assert.throws(() => {
+        loadControlPlaneRuntimeConfig(buildEnv({
+            AUTH_INTERNAL_TOKEN: undefined,
+        }));
+    }, /AUTH_INTERNAL_TOKEN is required when AUTH_ENABLE_INTERNAL_ENDPOINTS=true/);
+});
+
+test('startup config allows omitted AUTH_INTERNAL_TOKEN when internal API is disabled', () => {
+    const config = loadControlPlaneRuntimeConfig(buildEnv({
+        AUTH_ENABLE_INTERNAL_ENDPOINTS: 'false',
+        AUTH_INTERNAL_TOKEN: undefined,
+    }));
+
+    assert.equal(config.internal_api_enabled, false);
+    assert.equal(config.internal_token, undefined);
 });
 
 test('startup config fails when AUTH_PERSISTENCE_PG_URL is missing', () => {
@@ -138,6 +158,36 @@ describe('Config parsing — extended', () => {
         }, /AUTH_ENABLE_ADMIN_ENDPOINTS must be "true" or "false"/);
     });
 
+    test('AUTH_ENABLE_INTERNAL_ENDPOINTS parses true '
+        + 'and false', () => {
+        const configTrue =
+            loadControlPlaneRuntimeConfig(buildEnv({
+                AUTH_ENABLE_INTERNAL_ENDPOINTS: 'true',
+            }));
+        assert.equal(
+            configTrue.internal_api_enabled,
+            true,
+        );
+        const configFalse =
+            loadControlPlaneRuntimeConfig(buildEnv({
+                AUTH_ENABLE_INTERNAL_ENDPOINTS: 'false',
+                AUTH_INTERNAL_TOKEN: undefined,
+            }));
+        assert.equal(
+            configFalse.internal_api_enabled,
+            false,
+        );
+    });
+
+    test('AUTH_ENABLE_INTERNAL_ENDPOINTS rejects '
+        + 'invalid string', () => {
+        assert.throws(() => {
+            loadControlPlaneRuntimeConfig(buildEnv({
+                AUTH_ENABLE_INTERNAL_ENDPOINTS: 'yes',
+            }));
+        }, /AUTH_ENABLE_INTERNAL_ENDPOINTS must be "true" or "false"/);
+    });
+
     test('AUTH_SIGNING_KEY rejects short key '
         + '(< 32 chars)', () => {
         assert.throws(() => {
@@ -184,6 +234,11 @@ describe('Config parsing — extended', () => {
             config.token_config
                 .outage_grace_window_seconds,
             240
+        );
+        assert.equal(config.internal_api_enabled, true);
+        assert.equal(
+            config.internal_token,
+            'internal-token-0123456789abcdef',
         );
         assert.ok(config.persistence_pg_url);
     });
